@@ -1,0 +1,6 @@
+{
+  "name": "SIMKIR — Sistem Informasi Kartu Inventaris Ruangan",
+  "description": "Aplikasi pencatatan Kartu Inventaris Ruangan (KIR) terpadu meliputi Master Barang, Master Ruangan, Mutasi Aset, Cetak Label QR Code, dan Laporan Inventaris Resmi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

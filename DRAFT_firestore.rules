@@ -1,0 +1,309 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Validation blueprint: Ruangan
+    function isValidRuangan(data) {
+      return data.keys().hasAll([
+        'kodeRuangan',
+        'namaRuangan',
+        'subRuangan',
+        'gedung',
+        'lantai',
+        'penanggungJawab',
+        'nipPenanggungJawab',
+        'unitKerja',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'kodeRuangan',
+        'namaRuangan',
+        'subRuangan',
+        'gedung',
+        'lantai',
+        'penanggungJawab',
+        'nipPenanggungJawab',
+        'unitKerja',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.kodeRuangan is string && data.kodeRuangan.size() >= 2 && data.kodeRuangan.size() <= 32 && data.kodeRuangan.matches('^[a-zA-Z0-9_\\-./ ]+$') &&
+      data.namaRuangan is string && data.namaRuangan.size() >= 2 && data.namaRuangan.size() <= 120 &&
+      data.subRuangan is string && data.subRuangan.size() <= 120 &&
+      data.gedung is string && data.gedung.size() >= 1 && data.gedung.size() <= 80 &&
+      data.lantai is string && data.lantai.size() >= 1 && data.lantai.size() <= 20 &&
+      data.penanggungJawab is string && data.penanggungJawab.size() >= 2 && data.penanggungJawab.size() <= 100 &&
+      data.nipPenanggungJawab is string && data.nipPenanggungJawab.size() >= 1 && data.nipPenanggungJawab.size() <= 40 &&
+      data.unitKerja is string && data.unitKerja.size() >= 2 && data.unitKerja.size() <= 100 &&
+      data.keterangan is string && data.keterangan.size() <= 300 &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    // Validation blueprint: Barang
+    function isValidBarang(data) {
+      return data.keys().hasAll([
+        'kodeBarang',
+        'nup',
+        'namaBarang',
+        'merkTipe',
+        'nomorSeri',
+        'ukuran',
+        'bahan',
+        'kategori',
+        'tahunPerolehan',
+        'sumberDana',
+        'jumlah',
+        'satuan',
+        'kondisi',
+        'ruanganId',
+        'ruanganNama',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'kodeBarang',
+        'nup',
+        'namaBarang',
+        'merkTipe',
+        'nomorSeri',
+        'ukuran',
+        'bahan',
+        'kategori',
+        'tahunPerolehan',
+        'sumberDana',
+        'jumlah',
+        'satuan',
+        'kondisi',
+        'ruanganId',
+        'ruanganNama',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.kodeBarang is string && data.kodeBarang.size() >= 1 && data.kodeBarang.size() <= 50 &&
+      data.nup is string && data.nup.size() >= 1 && data.nup.size() <= 20 &&
+      data.namaBarang is string && data.namaBarang.size() >= 2 && data.namaBarang.size() <= 150 &&
+      data.merkTipe is string && data.merkTipe.size() <= 150 &&
+      data.nomorSeri is string && data.nomorSeri.size() <= 100 &&
+      data.ukuran is string && data.ukuran.size() <= 80 &&
+      data.bahan is string && data.bahan.size() >= 1 && data.bahan.size() <= 80 &&
+      data.kategori is string && data.kategori.size() <= 60 && data.kategori in [
+        'Elektronik & IT',
+        'Meubelair & Furniture',
+        'Pendingin & Tata Udara',
+        'Alat Ukur & Laboratorium',
+        'Kendaraan & Operasional',
+        'Perlengkapan Kantor'
+      ] &&
+      data.tahunPerolehan is int && data.tahunPerolehan >= 1970 && data.tahunPerolehan <= 2100 &&
+      data.sumberDana is string && data.sumberDana.size() >= 2 && data.sumberDana.size() <= 60 &&
+      data.jumlah is int && data.jumlah >= 1 && data.jumlah <= 100000 &&
+      data.satuan is string && data.satuan.size() >= 1 && data.satuan.size() <= 30 &&
+      data.kondisi is string && data.kondisi.size() <= 20 && data.kondisi in ['Baik', 'Kurang Baik', 'Rusak Berat'] &&
+      isValidId(data.ruanganId) &&
+      data.ruanganNama is string && data.ruanganNama.size() >= 1 && data.ruanganNama.size() <= 120 &&
+      data.keterangan is string && data.keterangan.size() <= 300 &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    // Validation blueprint: Mutasi
+    function isValidMutasi(data) {
+      return data.keys().hasAll([
+        'nomorBeritaAcara',
+        'tanggalMutasi',
+        'jenisMutasi',
+        'barangId',
+        'kodeBarang',
+        'namaBarang',
+        'ruanganAsalId',
+        'ruanganAsalNama',
+        'ruanganTujuanId',
+        'ruanganTujuanNama',
+        'kondisiAwal',
+        'kondisiAkhir',
+        'petugasInput',
+        'alasanMutasi',
+        'ownerId',
+        'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'nomorBeritaAcara',
+        'tanggalMutasi',
+        'jenisMutasi',
+        'barangId',
+        'kodeBarang',
+        'namaBarang',
+        'ruanganAsalId',
+        'ruanganAsalNama',
+        'ruanganTujuanId',
+        'ruanganTujuanNama',
+        'kondisiAwal',
+        'kondisiAkhir',
+        'petugasInput',
+        'alasanMutasi',
+        'ownerId',
+        'createdAt'
+      ]) &&
+      data.nomorBeritaAcara is string && data.nomorBeritaAcara.size() >= 3 && data.nomorBeritaAcara.size() <= 80 &&
+      data.tanggalMutasi is string && data.tanggalMutasi.size() >= 8 && data.tanggalMutasi.size() <= 20 &&
+      data.jenisMutasi is string && data.jenisMutasi.size() <= 40 && data.jenisMutasi in ['Perpindahan Ruangan', 'Perubahan Kondisi', 'Penempatan Baru'] &&
+      isValidId(data.barangId) &&
+      data.kodeBarang is string && data.kodeBarang.size() >= 1 && data.kodeBarang.size() <= 50 &&
+      data.namaBarang is string && data.namaBarang.size() >= 1 && data.namaBarang.size() <= 150 &&
+      isValidId(data.ruanganAsalId) &&
+      data.ruanganAsalNama is string && data.ruanganAsalNama.size() >= 1 && data.ruanganAsalNama.size() <= 120 &&
+      isValidId(data.ruanganTujuanId) &&
+      data.ruanganTujuanNama is string && data.ruanganTujuanNama.size() >= 1 && data.ruanganTujuanNama.size() <= 120 &&
+      data.kondisiAwal is string && data.kondisiAwal.size() <= 20 && data.kondisiAwal in ['Baik', 'Kurang Baik', 'Rusak Berat'] &&
+      data.kondisiAkhir is string && data.kondisiAkhir.size() <= 20 && data.kondisiAkhir in ['Baik', 'Kurang Baik', 'Rusak Berat'] &&
+      data.petugasInput is string && data.petugasInput.size() >= 2 && data.petugasInput.size() <= 100 &&
+      data.alasanMutasi is string && data.alasanMutasi.size() >= 2 && data.alasanMutasi.size() <= 300 &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid &&
+      data.createdAt is timestamp;
+    }
+
+    // Collection: /ruangan/{ruanganId}
+    match /ruangan/{ruanganId} {
+      allow get: if isEmailVerified() && isValidId(ruanganId) && existing().ownerId == request.auth.uid;
+      allow list: if isEmailVerified() && existing().ownerId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(ruanganId) &&
+        isValidRuangan(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(ruanganId) &&
+        isValidRuangan(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'kodeRuangan',
+          'namaRuangan',
+          'subRuangan',
+          'gedung',
+          'lantai',
+          'penanggungJawab',
+          'nipPenanggungJawab',
+          'unitKerja',
+          'keterangan',
+          'updatedAt'
+        ]);
+      allow delete: if isEmailVerified() && isValidId(ruanganId) && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection: /barang/{barangId}
+    match /barang/{barangId} {
+      allow get: if isEmailVerified() && isValidId(barangId) && existing().ownerId == request.auth.uid;
+      allow list: if isEmailVerified() && existing().ownerId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(barangId) &&
+        isValidBarang(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)) &&
+        get(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)).data.ownerId == request.auth.uid;
+      allow update: if isEmailVerified() &&
+        isValidId(barangId) &&
+        isValidBarang(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Update detail master barang (termasuk migrasi hapus field lama hargaPerolehan)
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'kodeBarang',
+            'nup',
+            'namaBarang',
+            'merkTipe',
+            'nomorSeri',
+            'ukuran',
+            'bahan',
+            'kategori',
+            'tahunPerolehan',
+            'sumberDana',
+            'hargaPerolehan',
+            'jumlah',
+            'satuan',
+            'kondisi',
+            'ruanganId',
+            'ruanganNama',
+            'keterangan',
+            'updatedAt'
+          ]) &&
+          exists(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)) &&
+          get(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)).data.ownerId == request.auth.uid) ||
+          // Action 2: Mutasi perpindahan ruangan / perubahan kondisi & migrasi skema v2
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'ruanganId',
+            'ruanganNama',
+            'kondisi',
+            'keterangan',
+            'ukuran',
+            'bahan',
+            'hargaPerolehan',
+            'updatedAt'
+          ]) &&
+          exists(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)) &&
+          get(/databases/$(database)/documents/ruangan/$(incoming().ruanganId)).data.ownerId == request.auth.uid)
+        );
+      allow delete: if isEmailVerified() && isValidId(barangId) && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection: /mutasi/{mutasiId}
+    match /mutasi/{mutasiId} {
+      allow get: if isEmailVerified() && isValidId(mutasiId) && existing().ownerId == request.auth.uid;
+      allow list: if isEmailVerified() && existing().ownerId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(mutasiId) &&
+        isValidMutasi(incoming()) &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/barang/$(incoming().barangId)) &&
+        get(/databases/$(database)/documents/barang/$(incoming().barangId)).data.ownerId == request.auth.uid &&
+        exists(/databases/$(database)/documents/ruangan/$(incoming().ruanganTujuanId)) &&
+        get(/databases/$(database)/documents/ruangan/$(incoming().ruanganTujuanId)).data.ownerId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isEmailVerified() && isValidId(mutasiId) && existing().ownerId == request.auth.uid;
+    }
+  }
+}

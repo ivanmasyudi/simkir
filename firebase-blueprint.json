@@ -1,0 +1,362 @@
+{
+  "entities": {
+    "Ruangan": {
+      "title": "Ruangan",
+      "description": "Data master ruangan untuk penempatan inventaris barang (KIR)",
+      "type": "object",
+      "properties": {
+        "kodeRuangan": {
+          "type": "string",
+          "description": "Kode unik ruangan, contoh: R-101",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-./ ]+$"
+        },
+        "namaRuangan": {
+          "type": "string",
+          "description": "Nama instalasi atau ruangan utama, contoh: INST. LABORATORIUM",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "subRuangan": {
+          "type": "string",
+          "description": "Sub-nama ruangan dalam kurung, contoh: R. PATOLOGI ANATOMI",
+          "maxLength": 120
+        },
+        "gedung": {
+          "type": "string",
+          "description": "Nama gedung atau blok",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "lantai": {
+          "type": "string",
+          "description": "Lantai lokasi ruangan",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "penanggungJawab": {
+          "type": "string",
+          "description": "Nama pejabat atau staf penanggung jawab ruangan",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "nipPenanggungJawab": {
+          "type": "string",
+          "description": "NIP atau ID Pegawai penanggung jawab ruangan",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "unitKerja": {
+          "type": "string",
+          "description": "Unit kerja atau bidang pengguna ruangan",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "keterangan": {
+          "type": "string",
+          "description": "Catatan tambahan mengenai ruangan",
+          "maxLength": 300
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID pengguna pembuat/pemilik data",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan dokumen"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan dokumen"
+        }
+      },
+      "required": [
+        "kodeRuangan",
+        "namaRuangan",
+        "subRuangan",
+        "gedung",
+        "lantai",
+        "penanggungJawab",
+        "nipPenanggungJawab",
+        "unitKerja",
+        "keterangan",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Barang": {
+      "title": "Barang",
+      "description": "Data master barang inventaris yang tercatat pada Kartu Inventaris Ruangan (KIR)",
+      "type": "object",
+      "properties": {
+        "kodeBarang": {
+          "type": "string",
+          "description": "Nomor kode barang sesuai standar inventaris, contoh: 1.3.2.05.02.01.001",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "nup": {
+          "type": "string",
+          "description": "Nomor Urut Pendaftaran (NUP) atau nomor register",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "namaBarang": {
+          "type": "string",
+          "description": "Jenis barang / Nama barang inventaris",
+          "minLength": 2,
+          "maxLength": 150
+        },
+        "merkTipe": {
+          "type": "string",
+          "description": "Merk / Model barang",
+          "maxLength": 150
+        },
+        "nomorSeri": {
+          "type": "string",
+          "description": "No. Seri Pabrik",
+          "maxLength": 100
+        },
+        "ukuran": {
+          "type": "string",
+          "description": "Ukuran atau kapasitas barang, contoh: 2PK, 14 Inch, 120x60cm",
+          "maxLength": 80
+        },
+        "bahan": {
+          "type": "string",
+          "description": "Bahan pembuatan barang, contoh: BESI, STAINLESS, KAYU, PLASTIK",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "kategori": {
+          "type": "string",
+          "description": "Kategori aset barang",
+          "enum": [
+            "Elektronik & IT",
+            "Meubelair & Furniture",
+            "Pendingin & Tata Udara",
+            "Alat Ukur & Laboratorium",
+            "Kendaraan & Operasional",
+            "Perlengkapan Kantor"
+          ]
+        },
+        "tahunPerolehan": {
+          "type": "number",
+          "description": "Tahun pembuatan / pembelian barang"
+        },
+        "sumberDana": {
+          "type": "string",
+          "description": "Sumber anggaran perolehan (APBN, APBD, BLUD, Hibah)",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "jumlah": {
+          "type": "number",
+          "description": "Jumlah barang"
+        },
+        "satuan": {
+          "type": "string",
+          "description": "Satuan unit (UNIT, BUAH, SET)",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "kondisi": {
+          "type": "string",
+          "description": "Status keadaan fisik barang",
+          "enum": ["Baik", "Kurang Baik", "Rusak Berat"]
+        },
+        "ruanganId": {
+          "type": "string",
+          "description": "ID Ruangan tempat barang berada saat ini",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ruanganNama": {
+          "type": "string",
+          "description": "Nama ruangan tempat barang berada saat ini",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "keterangan": {
+          "type": "string",
+          "description": "Catatan keterangan atau tautan dokumen",
+          "maxLength": 300
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID pengguna pembuat/pemilik data",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan dokumen"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan dokumen"
+        }
+      },
+      "required": [
+        "kodeBarang",
+        "nup",
+        "namaBarang",
+        "merkTipe",
+        "nomorSeri",
+        "ukuran",
+        "bahan",
+        "kategori",
+        "tahunPerolehan",
+        "sumberDana",
+        "jumlah",
+        "satuan",
+        "kondisi",
+        "ruanganId",
+        "ruanganNama",
+        "keterangan",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Mutasi": {
+      "title": "Mutasi",
+      "description": "Catatan riwayat perpindahan ruangan atau perubahan kondisi barang inventaris",
+      "type": "object",
+      "properties": {
+        "nomorBeritaAcara": {
+          "type": "string",
+          "description": "Nomor surat Berita Acara Serah Terima / Mutasi",
+          "minLength": 3,
+          "maxLength": 80
+        },
+        "tanggalMutasi": {
+          "type": "string",
+          "description": "Tanggal efektif mutasi (YYYY-MM-DD)",
+          "minLength": 8,
+          "maxLength": 20
+        },
+        "jenisMutasi": {
+          "type": "string",
+          "description": "Jenis transaksi mutasi",
+          "enum": ["Perpindahan Ruangan", "Perubahan Kondisi", "Penempatan Baru"]
+        },
+        "barangId": {
+          "type": "string",
+          "description": "ID Barang yang dimutasi",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kodeBarang": {
+          "type": "string",
+          "description": "Kode barang yang dimutasi",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "namaBarang": {
+          "type": "string",
+          "description": "Nama barang yang dimutasi",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "ruanganAsalId": {
+          "type": "string",
+          "description": "ID ruangan asal",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ruanganAsalNama": {
+          "type": "string",
+          "description": "Nama ruangan asal",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "ruanganTujuanId": {
+          "type": "string",
+          "description": "ID ruangan tujuan",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ruanganTujuanNama": {
+          "type": "string",
+          "description": "Nama ruangan tujuan",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kondisiAwal": {
+          "type": "string",
+          "description": "Kondisi barang sebelum mutasi",
+          "enum": ["Baik", "Kurang Baik", "Rusak Berat"]
+        },
+        "kondisiAkhir": {
+          "type": "string",
+          "description": "Kondisi barang sesudah mutasi",
+          "enum": ["Baik", "Kurang Baik", "Rusak Berat"]
+        },
+        "petugasInput": {
+          "type": "string",
+          "description": "Nama petugas pengurus barang yang mencatat mutasi",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "alasanMutasi": {
+          "type": "string",
+          "description": "Alasan atau dasar perpindahan/mutasi barang",
+          "minLength": 2,
+          "maxLength": 300
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID pengguna pembuat/pemilik data",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan dokumen"
+        }
+      },
+      "required": [
+        "nomorBeritaAcara",
+        "tanggalMutasi",
+        "jenisMutasi",
+        "barangId",
+        "kodeBarang",
+        "namaBarang",
+        "ruanganAsalId",
+        "ruanganAsalNama",
+        "ruanganTujuanId",
+        "ruanganTujuanNama",
+        "kondisiAwal",
+        "kondisiAkhir",
+        "petugasInput",
+        "alasanMutasi",
+        "ownerId",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/ruangan/{ruanganId}": {
+      "schema": { "$ref": "#/entities/Ruangan" },
+      "description": "Koleksi data master ruangan untuk Kartu Inventaris Ruangan (KIR)"
+    },
+    "/barang/{barangId}": {
+      "schema": { "$ref": "#/entities/Barang" },
+      "description": "Koleksi data master barang inventaris yang ditempatkan di dalam ruangan"
+    },
+    "/mutasi/{mutasiId}": {
+      "schema": { "$ref": "#/entities/Mutasi" },
+      "description": "Koleksi riwayat mutasi perpindahan ruangan dan perubahan kondisi barang"
+    }
+  }
+}
