@@ -34,6 +34,11 @@
   }
 }
 
+@page {
+  size: A4 landscape;
+  margin: 10mm 10mm 12mm 10mm;
+}
+
 @media print {
   .no-print {
     display: none !important;
@@ -44,13 +49,30 @@
   body {
     background: #ffffff !important;
     color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .print-sheet {
     box-shadow: none !important;
     border: none !important;
+    border-radius: 0 !important;
     padding: 0 !important;
     margin: 0 !important;
     width: 100% !important;
     max-width: none !important;
+  }
+  .print-page-break {
+    break-before: page !important;
+    page-break-before: always !important;
+  }
+  .print-sheet table thead {
+    display: table-header-group;
+  }
+  .print-sheet table tfoot {
+    display: table-row-group;
+  }
+  .print-sheet table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

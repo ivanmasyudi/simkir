@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Trash2, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  DatabaseBackup,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { InstansiSetting } from '../types/kir';
 import {
   formatResetSummaryMessage,
@@ -20,7 +26,7 @@ interface SettingsViewProps {
     barang: number;
     mutasi: number;
   };
-  onSeedCloudData: () => void;
+  onSeedCloudData: () => Promise<void> | void;
   onResetCloudData: (alsoResetInstansi: boolean) => Promise<ResetDataSummary>;
   onSignOut: () => void;
 }
@@ -38,16 +44,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSignOut,
 }) => {
   const [savedNotice, setSavedNotice] = useState(false);
+  const [isSeedModalOpen, setIsSeedModalOpen] = useState(false);
+  const [seedConfirmed, setSeedConfirmed] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [confirmPhrase, setConfirmPhrase] = useState('');
   const [alsoResetInstansi, setAlsoResetInstansi] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
-  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
+  const [statusNoticeMsg, setStatusNoticeMsg] = useState<string | null>(null);
 
   const totalRecords =
     dataCounts.ruangan + dataCounts.barang + dataCounts.mutasi;
   const canConfirmReset =
     isResetConfirmationValid(confirmPhrase) && !isResettingCloud;
+  const canConfirmSeed = seedConfirmed && !isSeedingCloud;
+
+  const openSeedModal = () => {
+    setSeedConfirmed(false);
+    setSeedError(null);
+    setIsSeedModalOpen(true);
+  };
+
+  const handleConfirmSeed = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!seedConfirmed) {
+      setSeedError(
+        'Centang kotak persetujuan terlebih dahulu sebelum memuat data contoh.'
+      );
+      return;
+    }
+    setSeedError(null);
+    try {
+      await onSeedCloudData();
+      setIsSeedModalOpen(false);
+      setSeedConfirmed(false);
+      setStatusNoticeMsg(
+        'Data contoh ruangan, barang, dan mutasi berhasil dimuat ke database Firebase.'
+      );
+    } catch (err) {
+      setSeedError(
+        err instanceof Error
+          ? err.message
+          : 'Gagal memuat data contoh ke database Firebase. Coba lagi.'
+      );
+    }
+  };
 
   const openResetModal = () => {
     setConfirmPhrase('');
@@ -69,7 +110,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const summary = await onResetCloudData(alsoResetInstansi);
       setIsResetModalOpen(false);
       setConfirmPhrase('');
-      setResetSuccessMsg(formatResetSummaryMessage(summary));
+      setStatusNoticeMsg(formatResetSummaryMessage(summary));
     } catch (err) {
       setResetError(
         err instanceof Error
@@ -140,14 +181,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </dl>
 
-        {resetSuccessMsg && (
+        {statusNoticeMsg && (
           <div className="flex items-start gap-2.5 p-3.5 bg-[#EBF4F2] border border-[#C7DFD9] rounded-md text-sm text-[#0B463B]">
             <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-[#0F5C4D]" />
-            <div className="flex-1">{resetSuccessMsg}</div>
+            <div className="flex-1">{statusNoticeMsg}</div>
             <button
               type="button"
-              onClick={() => setResetSuccessMsg(null)}
-              aria-label="Tutup notifikasi reset"
+              onClick={() => setStatusNoticeMsg(null)}
+              aria-label="Tutup notifikasi"
               className="text-stone-500 hover:text-stone-900 cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -158,7 +199,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <button
             type="button"
-            onClick={onSeedCloudData}
+            onClick={openSeedModal}
             disabled={isSeedingCloud || isResettingCloud}
             className="px-4 py-2.5 text-sm font-medium text-stone-800 bg-stone-100 border border-stone-300 rounded-md hover:bg-stone-200 disabled:opacity-50 transition-colors cursor-pointer"
           >
@@ -381,6 +422,120 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Modal Konfirmasi Muat Ulang Data Contoh (Cegah Terklik Tidak Sengaja) */}
+      {isSeedModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-seed-firebase-title"
+          className="fixed inset-0 z-50 bg-stone-900/50 flex items-center justify-center p-4 overflow-y-auto"
+        >
+          <div className="bg-white border border-stone-200 rounded-lg max-w-lg w-full p-6 space-y-5 shadow-lg">
+            <div className="flex items-start justify-between gap-3 border-b border-stone-200 pb-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-md bg-amber-50 border border-amber-200 text-amber-700 shrink-0 mt-0.5">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2
+                    id="modal-seed-firebase-title"
+                    className="text-lg font-bold text-stone-900"
+                  >
+                    {hasExistingData
+                      ? 'Konfirmasi Muat Ulang Data Contoh'
+                      : 'Konfirmasi Muat Data Contoh'}
+                  </h2>
+                  <p className="text-sm text-stone-600 mt-0.5">
+                    Pastikan Anda memang ingin memasukkan data contoh ke database Firebase.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isSeedingCloud && setIsSeedModalOpen(false)}
+                aria-label="Tutup konfirmasi muat data contoh"
+                className="p-1 text-stone-400 hover:text-stone-700 rounded cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-amber-50/70 border border-amber-200 rounded-md p-4 space-y-2 text-sm text-stone-800">
+              {hasExistingData ? (
+                <>
+                  <div className="font-semibold text-amber-900">
+                    Perhatian: Database Anda saat ini sudah berisi data!
+                  </div>
+                  <p className="text-stone-700 leading-relaxed">
+                    Saat ini sudah tersimpan{' '}
+                    <strong className="font-mono text-stone-900">
+                      {dataCounts.ruangan} Ruangan, {dataCounts.barang} Barang, dan{' '}
+                      {dataCounts.mutasi} Mutasi
+                    </strong>
+                    . Memuat ulang data contoh akan menambahkan paket data simulasi (ruangan, barang, dan mutasi contoh) serta menimpa data contoh lama yang ber-ID sama.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="font-semibold text-stone-900">
+                    Isi paket data contoh yang akan ditambahkan:
+                  </div>
+                  <p className="text-stone-700 leading-relaxed">
+                    Sistem akan menambahkan contoh daftar ruangan, barang inventaris, dan riwayat mutasi ke database Firebase Anda untuk keperluan uji coba.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <form onSubmit={handleConfirmSeed} className="space-y-4">
+              <label className="flex items-start gap-2.5 text-sm text-stone-800 cursor-pointer select-none">
+                <input
+                  id="checkbox-confirm-seed"
+                  type="checkbox"
+                  checked={seedConfirmed}
+                  onChange={(e) => setSeedConfirmed(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded border-stone-300 text-[#0F5C4D]"
+                />
+                <span>
+                  {hasExistingData
+                    ? 'Saya paham dan benar-benar ingin memuat ulang data contoh ke database Firebase.'
+                    : 'Saya ingin memuat data contoh ke database Firebase.'}
+                </span>
+              </label>
+
+              {seedError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">
+                  {seedError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-stone-200">
+                <button
+                  type="button"
+                  disabled={isSeedingCloud}
+                  onClick={() => setIsSeedModalOpen(false)}
+                  className="px-4 py-2.5 text-sm font-medium text-stone-700 bg-stone-100 border border-stone-300 rounded-md hover:bg-stone-200 disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={!canConfirmSeed}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-amber-700 rounded-md hover:bg-amber-800 disabled:opacity-45 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                >
+                  <DatabaseBackup className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isSeedingCloud
+                      ? 'Sedang Memuat Data...'
+                      : 'Ya, Muat Data Contoh'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal Konfirmasi Reset Data Firebase (2-Langkah Aman) */}
       {isResetModalOpen && (

@@ -20,6 +20,7 @@ import {
   InstansiSetting,
   KategoriBarang,
   KondisiBarang,
+  MasterReferensi,
   Ruangan,
 } from '../types/kir';
 import {
@@ -31,12 +32,18 @@ import {
   getUniqueParentRuanganNames,
   KATEGORI_LIST,
   KONDISI_LIST,
+  planBarangEditFromBreakdown,
   resolveBarangRoom,
-  sanitizeId,
   validateBarangInput,
 } from '../utils/kirLogic';
+import {
+  CUSTOM_MANUAL_OPTION_VALUE,
+  findMatchingMasterValue,
+  getEffectiveMasterOptions,
+} from '../utils/masterReferensi';
 import { QrCodeSvg } from './QrCodeSvg';
 import { TablePagination } from './TablePagination';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import {
   BarangSortKey,
   paginateItems,
@@ -48,6 +55,7 @@ interface MasterBarangViewProps {
   barangList: Barang[];
   ruanganList: Ruangan[];
   instansi: InstansiSetting;
+  masterReferensiList?: MasterReferensi[];
   initialFilterRuanganId?: string;
   triggerOpenAddModal?: number;
   onSaveBarang: (barang: Barang, isEdit: boolean) => Promise<void>;
@@ -60,6 +68,7 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
   barangList,
   ruanganList,
   instansi,
+  masterReferensiList = [],
   initialFilterRuanganId = 'ALL',
   triggerOpenAddModal = 0,
   onSaveBarang,
@@ -80,29 +89,46 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBarang, setEditingBarang] = useState<Barang | null>(null);
   const [detailBarang, setDetailBarang] = useState<Barang | null>(null);
+  const [deleteTargetBarang, setDeleteTargetBarang] = useState<Barang | null>(
+    null
+  );
+  const [isDeletingBarang, setIsDeletingBarang] = useState(false);
+  const [deleteBarangError, setDeleteBarangError] = useState<string | null>(
+    null
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Form fields (aligned with KIR 13 columns + cascading Ruangan Induk -> Sub-Ruangan)
+  // Unified Add & Edit form fields (aligned with KIR 13 columns + cascading Ruangan Induk -> Sub-Ruangan)
+  const [selectedKatalogId, setSelectedKatalogId] = useState('');
   const [kodeBarang, setKodeBarang] = useState('');
   const [nup, setNup] = useState('');
   const [namaBarang, setNamaBarang] = useState('');
   const [merkTipe, setMerkTipe] = useState('');
+  const [isManualMerk, setIsManualMerk] = useState(false);
   const [nomorSeri, setNomorSeri] = useState('');
   const [ukuran, setUkuran] = useState('');
+  const [isManualUkuran, setIsManualUkuran] = useState(false);
   const [bahan, setBahan] = useState('BESI');
-  const [kategori, setKategori] = useState<KategoriBarang>('Alat Ukur & Laboratorium');
+  const [isManualBahan, setIsManualBahan] = useState(false);
+  const [kategori, setKategori] = useState<KategoriBarang>('Perlengkapan Kantor');
   const [tahunPerolehan, setTahunPerolehan] = useState(2024);
   const [sumberDana, setSumberDana] = useState('BLUD');
-  const [jumlah, setJumlah] = useState(1);
   const [qtyBaik, setQtyBaik] = useState(1);
   const [qtyKurangBaik, setQtyKurangBaik] = useState(0);
   const [qtyRusakBerat, setQtyRusakBerat] = useState(0);
   const [satuan, setSatuan] = useState('UNIT');
-  const [kondisi, setKondisi] = useState<KondisiBarang>('Baik');
+  const [isManualSatuan, setIsManualSatuan] = useState(false);
   const [formParentRuangan, setFormParentRuangan] = useState('');
   const [ruanganId, setRuanganId] = useState('');
   const [keterangan, setKeterangan] = useState('');
+
+  // Effective Master Referensi options for dropdowns
+  const satuanOptions = getEffectiveMasterOptions(masterReferensiList, 'satuan');
+  const bahanOptions = getEffectiveMasterOptions(masterReferensiList, 'bahan');
+  const ukuranOptions = getEffectiveMasterOptions(masterReferensiList, 'ukuran');
+  const merkOptions = getEffectiveMasterOptions(masterReferensiList, 'merk');
+  const katalogOptions = getEffectiveMasterOptions(masterReferensiList, 'katalog');
 
   const parentRuanganNames = getUniqueParentRuanganNames(ruanganList);
   const filterSubRuanganOptions =
@@ -188,25 +214,36 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
 
   const openAddModal = () => {
     setEditingBarang(null);
-    const nextNum = String(barangList.length + 21).padStart(4, '0');
+    setSelectedKatalogId('');
+    const nextNum = String(barangList.length + 1).padStart(4, '0');
     setKodeBarang(
       `1.3.2.05.02.01.${String(barangList.length + 1).padStart(3, '0')}`
     );
     setNup(nextNum);
     setNamaBarang('');
     setMerkTipe('');
+    setIsManualMerk(false);
     setNomorSeri('');
     setUkuran('');
-    setBahan('BESI');
-    setKategori('Alat Ukur & Laboratorium');
+    setIsManualUkuran(false);
+    const defaultBahan =
+      findMatchingMasterValue('BESI', bahanOptions) ||
+      bahanOptions[0]?.nama ||
+      'BESI';
+    setBahan(defaultBahan);
+    setIsManualBahan(false);
+    setKategori('Perlengkapan Kantor');
     setTahunPerolehan(2024);
     setSumberDana('BLUD');
-    setJumlah(1);
     setQtyBaik(1);
     setQtyKurangBaik(0);
     setQtyRusakBerat(0);
-    setSatuan('UNIT');
-    setKondisi('Baik');
+    const defaultSatuan =
+      findMatchingMasterValue('UNIT', satuanOptions) ||
+      satuanOptions[0]?.nama ||
+      'UNIT';
+    setSatuan(defaultSatuan);
+    setIsManualSatuan(false);
 
     const defaultRoom =
       (filterRuangan !== 'ALL'
@@ -226,19 +263,66 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
 
   const openEditModal = (b: Barang) => {
     setEditingBarang(b);
+
+    const matchedKatalog = katalogOptions.find(
+      (k) =>
+        k.kode.trim().toLowerCase() === b.kodeBarang.trim().toLowerCase() &&
+        k.nama.trim().toLowerCase() === b.namaBarang.trim().toLowerCase()
+    );
+    setSelectedKatalogId(matchedKatalog?.id || '');
+
     setKodeBarang(b.kodeBarang);
     setNup(b.nup);
     setNamaBarang(b.namaBarang);
-    setMerkTipe(b.merkTipe);
-    setNomorSeri(b.nomorSeri);
-    setUkuran(b.ukuran || '');
-    setBahan(b.bahan || 'BESI');
+
+    const matchedMerk = findMatchingMasterValue(b.merkTipe || '', merkOptions);
+    if ((b.merkTipe || '').trim() && !matchedMerk) {
+      setMerkTipe(b.merkTipe);
+      setIsManualMerk(true);
+    } else {
+      setMerkTipe(matchedMerk || '');
+      setIsManualMerk(false);
+    }
+
+    setNomorSeri(b.nomorSeri || '');
+
+    const matchedUkuran = findMatchingMasterValue(b.ukuran || '', ukuranOptions);
+    if ((b.ukuran || '').trim() && !matchedUkuran) {
+      setUkuran(b.ukuran);
+      setIsManualUkuran(true);
+    } else {
+      setUkuran(matchedUkuran || '');
+      setIsManualUkuran(false);
+    }
+
+    const rawBahan = b.bahan || 'BESI';
+    const matchedBahan = findMatchingMasterValue(rawBahan, bahanOptions);
+    if (matchedBahan) {
+      setBahan(matchedBahan);
+      setIsManualBahan(false);
+    } else {
+      setBahan(rawBahan);
+      setIsManualBahan(true);
+    }
+
     setKategori(b.kategori);
     setTahunPerolehan(b.tahunPerolehan);
     setSumberDana(b.sumberDana);
-    setJumlah(b.jumlah);
-    setSatuan(b.satuan);
-    setKondisi(b.kondisi);
+
+    // Unified 3-condition breakdown initialized from existing record
+    setQtyBaik(b.kondisi === 'Baik' ? b.jumlah : 0);
+    setQtyKurangBaik(b.kondisi === 'Kurang Baik' ? b.jumlah : 0);
+    setQtyRusakBerat(b.kondisi === 'Rusak Berat' ? b.jumlah : 0);
+
+    const rawSatuan = (b.satuan || 'UNIT').toUpperCase();
+    const matchedSatuan = findMatchingMasterValue(rawSatuan, satuanOptions);
+    if (matchedSatuan) {
+      setSatuan(matchedSatuan);
+      setIsManualSatuan(false);
+    } else {
+      setSatuan(rawSatuan);
+      setIsManualSatuan(true);
+    }
 
     const matchedRoom = ruanganList.find((r) => r.id === b.ruanganId);
     setFormParentRuangan(
@@ -248,6 +332,18 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
     setKeterangan(b.keterangan);
     setFormError(null);
     setIsModalOpen(true);
+  };
+
+  const handleSelectKatalog = (katalogId: string) => {
+    setSelectedKatalogId(katalogId);
+    if (!katalogId) return;
+    const found = katalogOptions.find((item) => item.id === katalogId);
+    if (found) {
+      setNamaBarang(found.nama);
+      if (found.kode) {
+        setKodeBarang(found.kode);
+      }
+    }
   };
 
   const handleParentChangeInForm = (nextParent: string) => {
@@ -265,73 +361,7 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
       setFormError('Pilih Ruangan Induk dan Sub-Ruangan penempatan terlebih dahulu.');
       return;
     }
-    const fullRoomName = formatRuanganFullLabel(selectedRoom).slice(0, 120);
-    const nowIso = new Date().toISOString();
 
-    if (editingBarang) {
-      const candidate: Partial<Barang> = {
-        kodeBarang,
-        nup,
-        namaBarang,
-        merkTipe,
-        nomorSeri,
-        ukuran,
-        bahan,
-        kategori,
-        tahunPerolehan: Number(tahunPerolehan),
-        sumberDana,
-        jumlah: Number(jumlah),
-        satuan,
-        kondisi,
-        ruanganId,
-        ruanganNama: fullRoomName,
-        keterangan,
-      };
-
-      const validation = validateBarangInput(candidate);
-      if (!validation.valid) {
-        setFormError(validation.error || 'Periksa kembali isian barang.');
-        return;
-      }
-
-      const record: Barang = {
-        id: editingBarang.id,
-        kodeBarang: kodeBarang.trim(),
-        nup: nup.trim(),
-        namaBarang: namaBarang.trim(),
-        merkTipe: merkTipe.trim(),
-        nomorSeri: nomorSeri.trim(),
-        ukuran: ukuran.trim(),
-        bahan: bahan.trim(),
-        kategori,
-        tahunPerolehan: Number(tahunPerolehan),
-        sumberDana: sumberDana.trim(),
-        jumlah: Number(jumlah),
-        satuan: satuan.trim().toUpperCase(),
-        kondisi,
-        ruanganId,
-        ruanganNama: fullRoomName,
-        keterangan: keterangan.trim(),
-        ownerId: editingBarang.ownerId || 'demo-user',
-        createdAt: editingBarang.createdAt || nowIso,
-        updatedAt: nowIso,
-      };
-
-      try {
-        setIsSubmitting(true);
-        await onSaveBarang(record, true);
-        setIsModalOpen(false);
-      } catch (err) {
-        setFormError(
-          err instanceof Error ? err.message : 'Gagal menyimpan perubahan barang.'
-        );
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
-
-    // Add mode (Opsi B): build 1 record per non-zero condition with sequential NUP
     const totalBreakdownQty =
       (Number(qtyBaik) || 0) +
       (Number(qtyKurangBaik) || 0) +
@@ -349,6 +379,76 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
       return;
     }
 
+    const fullRoomName = formatRuanganFullLabel(selectedRoom).slice(0, 120);
+    const nowIso = new Date().toISOString();
+
+    if (editingBarang) {
+      const baseEditPayload: Omit<
+        Barang,
+        'id' | 'jumlah' | 'kondisi' | 'nup' | 'ownerId' | 'createdAt'
+      > = {
+        kodeBarang: kodeBarang.trim(),
+        namaBarang: namaBarang.trim(),
+        merkTipe: merkTipe.trim(),
+        nomorSeri: nomorSeri.trim(),
+        ukuran: ukuran.trim(),
+        bahan: bahan.trim(),
+        kategori,
+        tahunPerolehan: Number(tahunPerolehan),
+        sumberDana: sumberDana.trim(),
+        satuan: satuan.trim().toUpperCase(),
+        ruanganId,
+        ruanganNama: fullRoomName,
+        keterangan: keterangan.trim(),
+        updatedAt: nowIso,
+      };
+
+      const plan = planBarangEditFromBreakdown(editingBarang, baseEditPayload, {
+        baik: qtyBaik,
+        kurangBaik: qtyKurangBaik,
+        rusakBerat: qtyRusakBerat,
+      });
+
+      if (!plan) {
+        setFormError(
+          'Masukkan minimal 1 unit pada kondisi Baik, Kurang Baik, atau Rusak Berat.'
+        );
+        return;
+      }
+
+      const allToValidate = [plan.updatedRecord, ...plan.createdRecords];
+      for (const rec of allToValidate) {
+        const validation = validateBarangInput(rec);
+        if (!validation.valid) {
+          setFormError(validation.error || 'Periksa kembali isian barang.');
+          return;
+        }
+      }
+
+      try {
+        setIsSubmitting(true);
+        await onSaveBarang(plan.updatedRecord, true);
+        if (plan.createdRecords.length > 0) {
+          if (onSaveBarangBatch) {
+            await onSaveBarangBatch(plan.createdRecords);
+          } else {
+            for (const rec of plan.createdRecords) {
+              await onSaveBarang(rec, false);
+            }
+          }
+        }
+        setIsModalOpen(false);
+      } catch (err) {
+        setFormError(
+          err instanceof Error ? err.message : 'Gagal menyimpan perubahan barang.'
+        );
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    // Add mode: build 1 record per non-zero condition
     const basePayload: Omit<Barang, 'id' | 'jumlah' | 'kondisi' | 'nup'> = {
       kodeBarang: kodeBarang.trim(),
       namaBarang: namaBarang.trim(),
@@ -740,7 +840,7 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                           {item.kodeBarang}
                         </div>
                         <div className="text-xs font-mono text-stone-500 mt-1 tabular-nums">
-                          NUP {item.nup} · Thn {item.tahunPerolehan}
+                          Tahun {item.tahunPerolehan}
                         </div>
                       </td>
                       <td className="py-4 px-4 min-w-[180px]">
@@ -790,7 +890,10 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => onDeleteBarang(item.id)}
+                            onClick={() => {
+                              setDeleteBarangError(null);
+                              setDeleteTargetBarang(item);
+                            }}
                             aria-label={`Hapus ${item.namaBarang}`}
                             className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                             title="Hapus Barang"
@@ -911,7 +1014,32 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                 </div>
               </div>
 
-              {/* Tahap 2: Identitas Barang (Kolom 2–8) */}
+              {/* Pilihan Cepat dari Master Katalog Barang (Opsional — isi otomatis Nama & Kode) */}
+              <div>
+                <label
+                  htmlFor="input-katalog-barang"
+                  className="block text-xs font-semibold text-stone-700 mb-1"
+                >
+                  Pilih dari Master Katalog Barang (Opsional)
+                </label>
+                <select
+                  id="input-katalog-barang"
+                  value={selectedKatalogId}
+                  onChange={(e) => handleSelectKatalog(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-300 rounded-lg focus:outline-none focus:bg-white focus:border-[#0F5C4D]"
+                >
+                  <option value="">
+                    -- Pilih dari Master Katalog untuk isi otomatis Nama &amp; Kode --
+                  </option>
+                  {katalogOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.kode ? `${item.kode} — ${item.nama}` : item.nama}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Tahap 2: Identitas Barang (Kolom 2–3) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label
@@ -937,18 +1065,44 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                   >
                     Merk / Model (Kolom 3)
                   </label>
-                  <input
+                  <select
                     id="input-merk-tipe"
-                    type="text"
-                    value={merkTipe}
-                    onChange={(e) => setMerkTipe(e.target.value)}
-                    placeholder="Contoh: EPSON L3210 / PANASONIC / LEICA"
-                    className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  />
+                    value={isManualMerk ? CUSTOM_MANUAL_OPTION_VALUE : merkTipe}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_MANUAL_OPTION_VALUE) {
+                        setIsManualMerk(true);
+                        setMerkTipe('');
+                      } else {
+                        setIsManualMerk(false);
+                        setMerkTipe(e.target.value);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                  >
+                    <option value="">-- Pilih Merk / Kosongkan --</option>
+                    {merkOptions.map((opt) => (
+                      <option key={opt.id} value={opt.nama}>
+                        {opt.nama}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_MANUAL_OPTION_VALUE}>
+                      + Ketik manual...
+                    </option>
+                  </select>
+                  {isManualMerk && (
+                    <input
+                      id="input-merk-tipe-manual"
+                      type="text"
+                      value={merkTipe}
+                      onChange={(e) => setMerkTipe(e.target.value)}
+                      placeholder="Ketik Merk / Model lain..."
+                      className="mt-1.5 w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                    />
+                  )}
                 </div>
               </div>
 
-              {/* No. Seri Pabrik, Ukuran, Bahan */}
+              {/* No. Seri Pabrik, Ukuran, Bahan (Kolom 4–6) */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label
@@ -973,14 +1127,40 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                   >
                     Ukuran (Kolom 5)
                   </label>
-                  <input
+                  <select
                     id="input-ukuran"
-                    type="text"
-                    value={ukuran}
-                    onChange={(e) => setUkuran(e.target.value)}
-                    placeholder="Contoh: 2PK / A4 / 210x95cm"
-                    className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  />
+                    value={isManualUkuran ? CUSTOM_MANUAL_OPTION_VALUE : ukuran}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_MANUAL_OPTION_VALUE) {
+                        setIsManualUkuran(true);
+                        setUkuran('');
+                      } else {
+                        setIsManualUkuran(false);
+                        setUkuran(e.target.value);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                  >
+                    <option value="">-- Pilih Ukuran / Kosongkan --</option>
+                    {ukuranOptions.map((opt) => (
+                      <option key={opt.id} value={opt.nama}>
+                        {opt.nama}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_MANUAL_OPTION_VALUE}>
+                      + Ketik manual...
+                    </option>
+                  </select>
+                  {isManualUkuran && (
+                    <input
+                      id="input-ukuran-manual"
+                      type="text"
+                      value={ukuran}
+                      onChange={(e) => setUkuran(e.target.value)}
+                      placeholder="Contoh: 2 PK / 210x95cm"
+                      className="mt-1.5 w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                    />
+                  )}
                 </div>
                 <div>
                   <label
@@ -989,20 +1169,45 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                   >
                     Bahan (Kolom 6) *
                   </label>
-                  <input
+                  <select
                     id="input-bahan"
-                    type="text"
-                    required
-                    value={bahan}
-                    onChange={(e) => setBahan(e.target.value)}
-                    placeholder="Contoh: BESI / PLASTIK / KAYU"
-                    className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  />
+                    value={isManualBahan ? CUSTOM_MANUAL_OPTION_VALUE : bahan}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_MANUAL_OPTION_VALUE) {
+                        setIsManualBahan(true);
+                        setBahan('');
+                      } else {
+                        setIsManualBahan(false);
+                        setBahan(e.target.value);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                  >
+                    {bahanOptions.map((opt) => (
+                      <option key={opt.id} value={opt.nama}>
+                        {opt.nama}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_MANUAL_OPTION_VALUE}>
+                      + Ketik manual...
+                    </option>
+                  </select>
+                  {isManualBahan && (
+                    <input
+                      id="input-bahan-manual"
+                      type="text"
+                      required
+                      value={bahan}
+                      onChange={(e) => setBahan(e.target.value)}
+                      placeholder="Ketik bahan lain..."
+                      className="mt-1.5 w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                    />
+                  )}
                 </div>
               </div>
 
-              {/* Tahun Pembuatan/Pembelian, No. Kode Barang, NUP */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              {/* Tahun Pembuatan/Pembelian & No. Kode Barang (Kolom 7–8) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label
                     htmlFor="input-tahun"
@@ -1038,43 +1243,80 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                     className="w-full px-3 py-2 text-xs font-mono border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
                   />
                 </div>
-                <div>
-                  <label
-                    htmlFor="input-nup"
-                    className="block text-xs font-semibold text-stone-700 mb-1"
-                  >
-                    {editingBarang ? 'NUP / Register *' : 'NUP Awal *'}
-                  </label>
-                  <input
-                    id="input-nup"
-                    type="text"
-                    required
-                    value={nup}
-                    onChange={(e) => setNup(e.target.value)}
-                    placeholder="0021"
-                    className="w-full px-3 py-2 text-xs font-mono border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  />
-                </div>
               </div>
 
-              {/* Jumlah & Keadaan Barang: Opsi B (Rincian Baik / Kurang Baik / Rusak Berat saat Tambah Baru) */}
-              {editingBarang ? (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {/* Rincian Jumlah & Keadaan Barang (Kolom 9–12) — 100% Identik untuk Tambah & Edit */}
+              <div className="p-4 bg-stone-50 border border-stone-200 rounded-lg space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-stone-700">
+                    Rincian Jumlah &amp; Keadaan Barang (Kolom 9–12)
+                  </div>
+                  <div className="text-xs font-mono font-bold text-[#0F5C4D] tabular-nums">
+                    Total:{' '}
+                    {(Number(qtyBaik) || 0) +
+                      (Number(qtyKurangBaik) || 0) +
+                      (Number(qtyRusakBerat) || 0)}{' '}
+                    {satuan}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
                     <label
-                      htmlFor="input-jumlah"
-                      className="block text-xs font-semibold text-stone-700 mb-1"
+                      htmlFor="input-qty-baik"
+                      className="block text-xs font-semibold text-emerald-700 mb-1"
                     >
-                      Jumlah Barang (Kolom 9) *
+                      Baik (Kol. 10)
                     </label>
                     <input
-                      id="input-jumlah"
+                      id="input-qty-baik"
                       type="number"
-                      min={1}
-                      required
-                      value={jumlah}
-                      onChange={(e) => setJumlah(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs font-mono border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                      min={0}
+                      value={qtyBaik}
+                      onChange={(e) =>
+                        setQtyBaik(Math.max(0, Number(e.target.value) || 0))
+                      }
+                      className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="input-qty-kurang-baik"
+                      className="block text-xs font-semibold text-amber-700 mb-1"
+                    >
+                      Kurang Baik (11)
+                    </label>
+                    <input
+                      id="input-qty-kurang-baik"
+                      type="number"
+                      min={0}
+                      value={qtyKurangBaik}
+                      onChange={(e) =>
+                        setQtyKurangBaik(
+                          Math.max(0, Number(e.target.value) || 0)
+                        )
+                      }
+                      className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-amber-600"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="input-qty-rusak-berat"
+                      className="block text-xs font-semibold text-red-700 mb-1"
+                    >
+                      Rusak Berat (12)
+                    </label>
+                    <input
+                      id="input-qty-rusak-berat"
+                      type="number"
+                      min={0}
+                      value={qtyRusakBerat}
+                      onChange={(e) =>
+                        setQtyRusakBerat(
+                          Math.max(0, Number(e.target.value) || 0)
+                        )
+                      }
+                      className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-red-600"
                     />
                   </div>
                   <div>
@@ -1086,225 +1328,68 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
                     </label>
                     <select
                       id="input-satuan"
-                      value={satuan}
-                      onChange={(e) => setSatuan(e.target.value)}
-                      className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                      value={isManualSatuan ? CUSTOM_MANUAL_OPTION_VALUE : satuan}
+                      onChange={(e) => {
+                        if (e.target.value === CUSTOM_MANUAL_OPTION_VALUE) {
+                          setIsManualSatuan(true);
+                          setSatuan('');
+                        } else {
+                          setIsManualSatuan(false);
+                          setSatuan(e.target.value);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
                     >
-                      <option value="UNIT">UNIT</option>
-                      <option value="BUAH">BUAH</option>
-                      <option value="SET">SET</option>
-                      <option value="PAKET">PAKET</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="input-kondisi"
-                      className="block text-xs font-semibold text-stone-700 mb-1"
-                    >
-                      Keadaan Barang (10–12) *
-                    </label>
-                    <select
-                      id="input-kondisi"
-                      value={kondisi}
-                      onChange={(e) =>
-                        setKondisi(e.target.value as KondisiBarang)
-                      }
-                      className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                    >
-                      {KONDISI_LIST.map((k) => (
-                        <option key={k} value={k}>
-                          {k}
+                      {satuanOptions.map((opt) => (
+                        <option key={opt.id} value={opt.nama}>
+                          {opt.nama}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="input-sumber-dana"
-                      className="block text-xs font-semibold text-stone-700 mb-1"
-                    >
-                      Sumber Dana *
-                    </label>
-                    <select
-                      id="input-sumber-dana"
-                      value={sumberDana}
-                      onChange={(e) => setSumberDana(e.target.value)}
-                      className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                    >
-                      <option value="BLUD">BLUD</option>
-                      <option value="APBD">APBD</option>
-                      <option value="APBN">APBN</option>
-                      <option value="Hibah">Hibah</option>
-                    </select>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 bg-stone-50 border border-stone-200 rounded-lg space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[11px] font-bold uppercase tracking-wide text-stone-700">
-                      Rincian Jumlah &amp; Keadaan Barang (Kolom 9–12)
-                    </div>
-                    <div className="text-xs font-mono font-bold text-[#0F5C4D] tabular-nums">
-                      Total:{' '}
-                      {(Number(qtyBaik) || 0) +
-                        (Number(qtyKurangBaik) || 0) +
-                        (Number(qtyRusakBerat) || 0)}{' '}
-                      {satuan}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                    <div>
-                      <label
-                        htmlFor="input-qty-baik"
-                        className="block text-xs font-semibold text-emerald-700 mb-1"
-                      >
-                        Baik (Kol. 10)
-                      </label>
-                      <input
-                        id="input-qty-baik"
-                        type="number"
-                        min={0}
-                        value={qtyBaik}
-                        onChange={(e) =>
-                          setQtyBaik(Math.max(0, Number(e.target.value) || 0))
-                        }
-                        className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-emerald-600"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="input-qty-kurang-baik"
-                        className="block text-xs font-semibold text-amber-700 mb-1"
-                      >
-                        Kurang Baik (11)
-                      </label>
-                      <input
-                        id="input-qty-kurang-baik"
-                        type="number"
-                        min={0}
-                        value={qtyKurangBaik}
-                        onChange={(e) =>
-                          setQtyKurangBaik(
-                            Math.max(0, Number(e.target.value) || 0)
-                          )
-                        }
-                        className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-amber-600"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="input-qty-rusak-berat"
-                        className="block text-xs font-semibold text-red-700 mb-1"
-                      >
-                        Rusak Berat (12)
-                      </label>
-                      <input
-                        id="input-qty-rusak-berat"
-                        type="number"
-                        min={0}
-                        value={qtyRusakBerat}
-                        onChange={(e) =>
-                          setQtyRusakBerat(
-                            Math.max(0, Number(e.target.value) || 0)
-                          )
-                        }
-                        className="w-full px-3 py-2 text-xs font-mono bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-red-600"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="input-satuan"
-                        className="block text-xs font-semibold text-stone-700 mb-1"
-                      >
-                        Satuan *
-                      </label>
-                      <select
-                        id="input-satuan"
-                        value={satuan}
-                        onChange={(e) => setSatuan(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                      >
-                        <option value="UNIT">UNIT</option>
-                        <option value="BUAH">BUAH</option>
-                        <option value="SET">SET</option>
-                        <option value="PAKET">PAKET</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="input-sumber-dana"
-                        className="block text-xs font-semibold text-stone-700 mb-1"
-                      >
-                        Sumber Dana *
-                      </label>
-                      <select
-                        id="input-sumber-dana"
-                        value={sumberDana}
-                        onChange={(e) => setSumberDana(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                      >
-                        <option value="BLUD">BLUD</option>
-                        <option value="APBD">APBD</option>
-                        <option value="APBN">APBN</option>
-                        <option value="Hibah">Hibah</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {[qtyBaik, qtyKurangBaik, qtyRusakBerat].filter((n) => n > 0)
-                    .length > 1 && (
-                    <p className="text-[11px] text-stone-600 leading-relaxed">
-                      Barang dengan lebih dari satu kondisi akan otomatis dicatat
-                      terpisah per kondisi (NUP berurutan) agar mudah dimutasi
-                      dan cetak stiker QR, lalu otomatis digabung menjadi{' '}
-                      <strong>1 baris rekap</strong> saat Cetak Laporan KIR &amp;
-                      Excel.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Kategori & Keterangan */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="input-kategori"
-                    className="block text-xs font-semibold text-stone-700 mb-1"
-                  >
-                    Kategori Klasifikasi *
-                  </label>
-                  <select
-                    id="input-kategori"
-                    value={kategori}
-                    onChange={(e) =>
-                      setKategori(e.target.value as KategoriBarang)
-                    }
-                    className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  >
-                    {KATEGORI_LIST.map((kat) => (
-                      <option key={kat} value={kat}>
-                        {kat}
+                      <option value={CUSTOM_MANUAL_OPTION_VALUE}>
+                        + Ketik manual...
                       </option>
-                    ))}
-                  </select>
+                    </select>
+                    {isManualSatuan && (
+                      <input
+                        id="input-satuan-manual"
+                        type="text"
+                        required
+                        value={satuan}
+                        onChange={(e) => setSatuan(e.target.value.toUpperCase())}
+                        placeholder="Ketik satuan..."
+                        className="mt-1.5 w-full px-3 py-2 text-xs bg-white border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                      />
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <label
-                    htmlFor="input-ket-barang"
-                    className="block text-xs font-semibold text-stone-700 mb-1"
-                  >
-                    Keterangan / Tautan Dokumen (Kolom 13)
-                  </label>
-                  <input
-                    id="input-ket-barang"
-                    type="text"
-                    value={keterangan}
-                    onChange={(e) => setKeterangan(e.target.value)}
-                    placeholder="Catatan tambahan atau link dokumentasi..."
-                    className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
-                  />
-                </div>
+
+                {[qtyBaik, qtyKurangBaik, qtyRusakBerat].filter((n) => n > 0)
+                  .length > 1 && (
+                  <p className="text-[11px] text-stone-600 leading-relaxed">
+                    Barang dengan lebih dari satu kondisi akan otomatis dicatat
+                    terpisah per kondisi agar mudah dimutasi dan cetak stiker QR,
+                    lalu otomatis digabung menjadi <strong>1 baris rekap</strong>{' '}
+                    saat Cetak Laporan KIR &amp; Excel.
+                  </p>
+                )}
+              </div>
+
+              {/* Keterangan */}
+              <div>
+                <label
+                  htmlFor="input-ket-barang"
+                  className="block text-xs font-semibold text-stone-700 mb-1"
+                >
+                  Keterangan / Tautan Dokumen (Kolom 13)
+                </label>
+                <input
+                  id="input-ket-barang"
+                  type="text"
+                  value={keterangan}
+                  onChange={(e) => setKeterangan(e.target.value)}
+                  placeholder="Catatan tambahan atau link dokumentasi..."
+                  className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:border-[#0F5C4D]"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-stone-200">
@@ -1341,7 +1426,7 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
               <div className="flex items-start justify-between border-b border-stone-200 pb-3">
                 <div>
                   <div className="text-xs font-mono text-stone-500">
-                    {detailBarang.kodeBarang} · NUP {detailBarang.nup}
+                    {detailBarang.kodeBarang} · Tahun {detailBarang.tahunPerolehan}
                   </div>
                   <h2 className="text-base font-bold text-stone-900">
                     {detailBarang.namaBarang}
@@ -1424,6 +1509,64 @@ export const MasterBarangView: React.FC<MasterBarangViewProps> = ({
               </div>
             </div>
           </div>
+        );
+      })()}
+
+      {/* Konfirmasi Hapus Barang */}
+      {(() => {
+        const roomInfo = deleteTargetBarang
+          ? resolveBarangRoom(deleteTargetBarang, ruanganList)
+          : null;
+        return (
+          <ConfirmDeleteModal
+            isOpen={Boolean(deleteTargetBarang)}
+            title="Hapus Data Barang?"
+            description="Data barang yang dihapus permanen dari database tidak dapat dikembalikan."
+            itemName={deleteTargetBarang?.namaBarang || ''}
+            details={
+              deleteTargetBarang
+                ? [
+                    { label: 'No. Kode Barang', value: deleteTargetBarang.kodeBarang },
+                    {
+                      label: 'Lokasi Ruangan',
+                      value: roomInfo?.subName
+                        ? `${roomInfo.parentName} — ${roomInfo.subName}`
+                        : roomInfo?.parentName || '-',
+                    },
+                    {
+                      label: 'Jumlah & Kondisi',
+                      value: `${deleteTargetBarang.jumlah} ${deleteTargetBarang.satuan} · ${deleteTargetBarang.kondisi}`,
+                    },
+                  ]
+                : []
+            }
+            confirmLabel="Ya, Hapus Barang"
+            isDeleting={isDeletingBarang}
+            errorMessage={deleteBarangError}
+            onCancel={() => {
+              if (!isDeletingBarang) {
+                setDeleteTargetBarang(null);
+                setDeleteBarangError(null);
+              }
+            }}
+            onConfirm={async () => {
+              if (!deleteTargetBarang) return;
+              try {
+                setIsDeletingBarang(true);
+                setDeleteBarangError(null);
+                await onDeleteBarang(deleteTargetBarang.id);
+                setDeleteTargetBarang(null);
+              } catch (err) {
+                setDeleteBarangError(
+                  err instanceof Error
+                    ? err.message
+                    : 'Gagal menghapus data barang. Coba lagi.'
+                );
+              } finally {
+                setIsDeletingBarang(false);
+              }
+            }}
+          />
         );
       })()}
     </div>

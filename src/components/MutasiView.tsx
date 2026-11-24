@@ -699,7 +699,7 @@ export const MutasiView: React.FC<MutasiViewProps> = ({
                       {barangInAsalRoom.map((b) => (
                         <option key={b.id} value={b.id}>
                           {b.namaBarang}
-                          {b.merkTipe ? ` — ${b.merkTipe}` : ''} ({b.kondisi} · {b.jumlah} {b.satuan} · NUP {b.nup})
+                          {b.merkTipe ? ` — ${b.merkTipe}` : ''} ({b.kondisi} · {b.jumlah} {b.satuan})
                         </option>
                       ))}
                     </select>

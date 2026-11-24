@@ -1,8 +1,10 @@
 import ExcelJS from 'exceljs';
 import { Barang, InstansiSetting, Ruangan } from '../types/kir';
 import {
+  buildKirRoomSections,
   consolidateKirReportRows,
   getSubRuanganByParent,
+  KirRoomSection,
 } from './kirLogic';
 
 export interface KirExcelExportOptions {
@@ -11,9 +13,37 @@ export interface KirExcelExportOptions {
   parentRuanganName?: string;
   ruanganList?: Ruangan[];
   consolidateSameItems?: boolean;
+  /** When true (and ruangan is undefined), separates each sub-ruangan with native horizontal page breaks on 1 sheet */
+  splitByRoom?: boolean;
+  /** When splitByRoom is true, whether to include rooms that have 0 items (default false) */
+  includeEmptyRooms?: boolean;
+  /** Optional pre-built sections (takes precedence over splitByRoom computation) */
+  sections?: KirRoomSection[];
   /** Pre-rendered PNG or JPEG base64 (with or without data URL prefix) for the Kop logo */
   logoBase64?: string;
   logoExtension?: 'png' | 'jpeg';
+}
+
+export interface KirPrintPageMeta {
+  totalPrintPages: number;
+  kopLabel: string;
+}
+
+export const DEFAULT_KIR_ROWS_PER_PRINT_PAGE = 20;
+
+/**
+ * Computes automatic KIR print page count and Kop Kanan "Halaman" label
+ * based on total consolidated rows (1 page -> "1", multi-page -> "1 s.d N").
+ */
+export function computeKirPrintPageMeta(
+  totalRows: number,
+  rowsPerPrintPage = DEFAULT_KIR_ROWS_PER_PRINT_PAGE
+): KirPrintPageMeta {
+  const safePerPage = Math.max(1, Math.floor(rowsPerPrintPage));
+  const safeRows = Math.max(0, Math.floor(totalRows));
+  const totalPrintPages = Math.max(1, Math.ceil(safeRows / safePerPage));
+  const kopLabel = totalPrintPages <= 1 ? '1' : `1 s.d ${totalPrintPages}`;
+  return { totalPrintPages, kopLabel };
 }
 
 export const DEFAULT_KIR_EMBLEM_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="200" height="240">
@@ -107,121 +137,51 @@ const MEDIUM_BLACK: Partial<ExcelJS.Border> = {
 };
 
 /**
- * Generates a native .xlsx Workbook buffer matching the official 13-column KIR
- * print sheet (Logo, Kop Kiri, Kop Kanan, 13 columns, JUMLAH TOTAL, and
- * 3-pejabat signature block: Direktur, Penanggung Jawab Ruangan, Pengurus Barang).
+ * Writes a complete official 13-column KIR block (Title, Logo, Kop Kiri & Kanan,
+ * 13-column table, JUMLAH TOTAL, and 3-pejabat signature block) starting at
+ * `startRow` on `sheet`, returning the last written row number (sigNipRow).
  */
-export async function buildKirExcelBuffer(
-  barangList: Barang[],
+function writeKirSectionToSheet(
+  sheet: ExcelJS.Worksheet,
+  section: KirRoomSection,
   instansi: InstansiSetting,
-  ruangan?: Ruangan,
-  options?: KirExcelExportOptions
-): Promise<ArrayBuffer> {
-  const startUrut = options?.startUrut ?? 1;
-  const tanggalCetak = options?.tanggalCetak ?? '21 November 2026';
-  const ruanganList = options?.ruanganList ?? [];
-  const parentName = options?.parentRuanganName;
-  const consolidateSameItems = options?.consolidateSameItems ?? true;
+  params: {
+    startRow: number;
+    startUrut: number;
+    tanggalCetak: string;
+    logoImageId?: number;
+  }
+): number {
+  const { startRow, startUrut, tanggalCetak, logoImageId } = params;
+  const printPageMeta = computeKirPrintPageMeta(section.rows.length);
 
-  const namaRuanganHeader = ruangan
-    ? ruangan.namaRuangan
-    : parentName && parentName !== 'ALL'
-    ? parentName
-    : 'SELURUH RUANGAN';
-
-  const subRuanganHeader = ruangan?.subRuangan
-    ? `( ${ruangan.subRuangan} )`
-    : parentName && parentName !== 'ALL'
-    ? '( SEMUA SUB-RUANGAN )'
-    : '( REKAPITULASI INVENTARIS )';
-
-  const fallbackPjRoom =
-    ruangan ||
-    (parentName && parentName !== 'ALL'
-      ? getSubRuanganByParent(ruanganList, parentName)[0]
-      : undefined);
-
-  const reportRows = consolidateKirReportRows(barangList, {
-    ruangan,
-    ruanganList,
-    consolidateSameItems,
-  });
-
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'SIMKIR';
-  workbook.created = new Date();
-
-  const sheet = workbook.addWorksheet('KARTU INVENTARIS RUANGAN', {
-    views: [{ showGridLines: false }],
-    pageSetup: {
-      paperSize: 9, // A4
-      orientation: 'landscape',
-      fitToPage: true,
-      fitToWidth: 1,
-      fitToHeight: 0,
-      horizontalCentered: true,
-      margins: {
-        left: 0.4,
-        right: 0.4,
-        top: 0.45,
-        bottom: 0.45,
-        header: 0.2,
-        footer: 0.2,
-      },
-    },
-  });
-
-  // 13 columns matching exact KIR specification
-  sheet.columns = [
-    { key: 'urut', width: 7 },       // A (1)
-    { key: 'nama', width: 28 },      // B (2)
-    { key: 'merk', width: 15 },      // C (3)
-    { key: 'seri', width: 16 },      // D (4)
-    { key: 'ukuran', width: 11 },    // E (5)
-    { key: 'bahan', width: 12 },     // F (6)
-    { key: 'tahun', width: 12 },     // G (7)
-    { key: 'kode', width: 21 },      // H (8)
-    { key: 'jumlah', width: 12 },    // I (9)
-    { key: 'baik', width: 8 },       // J (10)
-    { key: 'kb', width: 9 },         // K (11)
-    { key: 'rb', width: 9 },         // L (12)
-    { key: 'ket', width: 24 },       // M (13)
-  ];
-
-  // Row 1: Document Title
-  sheet.mergeCells('A1:M1');
-  const titleCell = sheet.getCell('A1');
+  // Offset 0: Document Title
+  const titleRow = startRow;
+  sheet.mergeCells(`A${titleRow}:M${titleRow}`);
+  const titleCell = sheet.getCell(`A${titleRow}`);
   titleCell.value = 'KARTU INVENTARIS RUANGAN';
-  titleCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FF0F172A' } };
+  titleCell.font = {
+    name: 'Arial',
+    size: 13,
+    bold: true,
+    color: { argb: 'FF0F172A' },
+  };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
-  sheet.getRow(1).height = 24;
+  sheet.getRow(titleRow).height = 24;
 
-  // Row 2: Spacer
-  sheet.getRow(2).height = 6;
+  // Offset 1: Spacer
+  const spacerTopRow = startRow + 1;
+  sheet.getRow(spacerTopRow).height = 6;
 
-  // Embed Logo natively in Kop Kiri (aligned left of PROPINSI..SATUAN KERJA)
-  const resolvedLogoBase64 =
-    options?.logoBase64 ||
-    (instansi.logoUrl && /^data:image\/(png|jpe?g);base64,/i.test(instansi.logoUrl)
-      ? instansi.logoUrl
-      : undefined);
-
-  if (resolvedLogoBase64) {
-    const extension: 'png' | 'jpeg' =
-      options?.logoExtension ||
-      (/^data:image\/jpe?g;base64,/i.test(resolvedLogoBase64) ? 'jpeg' : 'png');
-    const imageId = workbook.addImage({
-      base64: resolvedLogoBase64,
-      extension,
-    });
-    // Positioned cleanly inside A3:B7 to the left of right-aligned Kop labels
-    sheet.addImage(imageId, {
-      tl: { col: 0.75, row: 2.1 },
+  // Reuse single workbook logo image across all sections (keeps .xlsx lightweight)
+  if (typeof logoImageId === 'number') {
+    sheet.addImage(logoImageId, {
+      tl: { col: 0.75, row: startRow - 1 + 2.1 },
       ext: { width: 64, height: 80 },
     });
   }
 
-  // Rows 3-7: Kop Kiri & Kop Kanan (exact match to LaporanKirView preview)
+  // Offset 2..6: Kop Kiri & Kop Kanan
   const kopRows: Array<{
     row: number;
     leftLabel: string;
@@ -233,7 +193,7 @@ export async function buildKirExcelBuffer(
     rightValueAsText?: boolean;
   }> = [
     {
-      row: 3,
+      row: startRow + 2,
       leftLabel: 'PROPINSI',
       leftValue: `: ${(instansi.propinsi || '').toUpperCase()}`,
       rightLabel: 'NO. KODE LOKASI',
@@ -243,25 +203,27 @@ export async function buildKirExcelBuffer(
       rightValueAsText: true,
     },
     {
-      row: 4,
+      row: startRow + 3,
       leftLabel: 'KOTA/KAB',
       leftValue: `: ${(instansi.kotaKab || '').toUpperCase()}`,
       rightLabel: 'NAMA RUANGAN',
-      rightValue: `: ${namaRuanganHeader.toUpperCase()}`,
+      rightValue: `: ${section.namaRuangan.toUpperCase()}`,
       rightLabelBold: true,
       rightValueBold: true,
     },
     {
-      row: 5,
+      row: startRow + 4,
       leftLabel: 'UNIT',
       leftValue: `: ${(instansi.unit || '').toUpperCase()}`,
       rightLabel: '',
-      rightValue: `  ${subRuanganHeader.toUpperCase()}`,
+      rightValue: section.subRuanganLabel
+        ? `  ${section.subRuanganLabel.toUpperCase()}`
+        : '',
       rightLabelBold: false,
       rightValueBold: true,
     },
     {
-      row: 6,
+      row: startRow + 5,
       leftLabel: 'SATUAN KERJA',
       leftValue: `: ${(instansi.satuanKerja || '').toUpperCase()}`,
       rightLabel: 'Tahun data pelaporan',
@@ -270,11 +232,11 @@ export async function buildKirExcelBuffer(
       rightValueBold: false,
     },
     {
-      row: 7,
+      row: startRow + 6,
       leftLabel: '',
       leftValue: '',
       rightLabel: 'Halaman',
-      rightValue: `: ${instansi.halaman || ''}`,
+      rightValue: `: ${printPageMeta.kopLabel}`,
       rightLabelBold: false,
       rightValueBold: false,
     },
@@ -288,13 +250,27 @@ export async function buildKirExcelBuffer(
 
     const leftLabelCell = sheet.getCell(`B${kr.row}`);
     leftLabelCell.value = kr.leftLabel;
-    leftLabelCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+    leftLabelCell.font = {
+      name: 'Arial',
+      size: 9,
+      bold: true,
+      color: { argb: 'FF0F172A' },
+    };
     leftLabelCell.alignment = { horizontal: 'right', vertical: 'middle' };
 
     const leftValCell = sheet.getCell(`C${kr.row}`);
     leftValCell.value = kr.leftValue;
-    leftValCell.font = { name: 'Arial', size: 9, bold: false, color: { argb: 'FF0F172A' } };
-    leftValCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    leftValCell.font = {
+      name: 'Arial',
+      size: 9,
+      bold: false,
+      color: { argb: 'FF0F172A' },
+    };
+    leftValCell.alignment = {
+      horizontal: 'left',
+      vertical: 'middle',
+      wrapText: true,
+    };
 
     const rightLabelCell = sheet.getCell(`H${kr.row}`);
     rightLabelCell.value = kr.rightLabel;
@@ -314,19 +290,24 @@ export async function buildKirExcelBuffer(
       bold: Boolean(kr.rightValueBold),
       color: { argb: 'FF0F172A' },
     };
-    rightValCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    rightValCell.alignment = {
+      horizontal: 'left',
+      vertical: 'middle',
+      wrapText: true,
+    };
     if (kr.rightValueAsText) {
       rightValCell.numFmt = '@';
     }
   }
 
-  // Row 8: Spacer before table
-  sheet.getRow(8).height = 8;
+  // Offset 7: Spacer before table
+  const spacerBeforeTableRow = startRow + 7;
+  sheet.getRow(spacerBeforeTableRow).height = 8;
 
-  // Rows 9-11: Exact 13-column Table Headers
-  const headerTopRow = 9;
-  const headerSubRow = 10;
-  const headerNumRow = 11;
+  // Offset 8..10: Exact 13-column Table Headers
+  const headerTopRow = startRow + 8;
+  const headerSubRow = startRow + 9;
+  const headerNumRow = startRow + 10;
 
   sheet.getRow(headerTopRow).height = 24;
   sheet.getRow(headerSubRow).height = 24;
@@ -360,12 +341,21 @@ export async function buildKirExcelBuffer(
     sheet.getCell(headerNumRow, c).value = c;
   }
 
-  // Style Header Rows 9-10
+  // Style Header Rows
   for (const r of [headerTopRow, headerSubRow]) {
     for (let c = 1; c <= 13; c++) {
       const cell = sheet.getCell(r, c);
-      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.font = {
+        name: 'Arial',
+        size: 9,
+        bold: true,
+        color: { argb: 'FF0F172A' },
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
@@ -380,7 +370,7 @@ export async function buildKirExcelBuffer(
     }
   }
 
-  // Style Column Number Row 11 (1..13)
+  // Style Column Number Row (1..13)
   for (let c = 1; c <= 13; c++) {
     const cell = sheet.getCell(headerNumRow, c);
     cell.font = {
@@ -411,12 +401,17 @@ export async function buildKirExcelBuffer(
   let totalRusakBerat = 0;
   let currentRow = headerNumRow + 1;
 
-  if (reportRows.length === 0) {
+  if (section.rows.length === 0) {
     sheet.mergeCells(`A${currentRow}:M${currentRow}`);
     const emptyCell = sheet.getCell(`A${currentRow}`);
     emptyCell.value =
       'Tidak ada data inventaris barang pada sub-ruangan/kriteria ini.';
-    emptyCell.font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF64748B' } };
+    emptyCell.font = {
+      name: 'Arial',
+      size: 9,
+      italic: true,
+      color: { argb: 'FF64748B' },
+    };
     emptyCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sheet.getRow(currentRow).height = 28;
     for (let c = 1; c <= 13; c++) {
@@ -429,7 +424,7 @@ export async function buildKirExcelBuffer(
     }
     currentRow += 1;
   } else {
-    reportRows.forEach((row, idx) => {
+    section.rows.forEach((row, idx) => {
       totalUnit += row.jumlah;
       totalBaik += row.baik;
       totalKurangBaik += row.kurangBaik;
@@ -458,10 +453,15 @@ export async function buildKirExcelBuffer(
       const excelRow = sheet.getRow(currentRow);
       excelRow.values = values;
 
-      // Dynamic row height for wrapped descriptions/URLs
       const longestKetLines = Math.max(1, Math.ceil(ketText.length / 24));
-      const longestNamaLines = Math.max(1, Math.ceil((row.namaBarang || '').length / 26));
-      excelRow.height = Math.max(26, Math.max(longestKetLines, longestNamaLines, 2) * 14);
+      const longestNamaLines = Math.max(
+        1,
+        Math.ceil((row.namaBarang || '').length / 26)
+      );
+      excelRow.height = Math.max(
+        26,
+        Math.max(longestKetLines, longestNamaLines, 2) * 14
+      );
 
       for (let c = 1; c <= 13; c++) {
         const cell = sheet.getCell(currentRow, c);
@@ -491,7 +491,7 @@ export async function buildKirExcelBuffer(
     });
   }
 
-  // Totals Row (JUMLAH TOTAL) — exact match to preview including `${reportRows.length} Jenis`
+  // Totals Row (JUMLAH TOTAL)
   const totalRow = currentRow;
   sheet.mergeCells(`A${totalRow}:H${totalRow}`);
   sheet.getCell(`A${totalRow}`).value = 'JUMLAH TOTAL';
@@ -499,12 +499,17 @@ export async function buildKirExcelBuffer(
   sheet.getCell(`J${totalRow}`).value = totalBaik;
   sheet.getCell(`K${totalRow}`).value = totalKurangBaik;
   sheet.getCell(`L${totalRow}`).value = totalRusakBerat;
-  sheet.getCell(`M${totalRow}`).value = `${reportRows.length} Jenis`;
+  sheet.getCell(`M${totalRow}`).value = `${section.rows.length} Jenis`;
   sheet.getRow(totalRow).height = 22;
 
   for (let c = 1; c <= 13; c++) {
     const cell = sheet.getCell(totalRow, c);
-    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+    cell.font = {
+      name: 'Arial',
+      size: 9,
+      bold: true,
+      color: { argb: 'FF0F172A' },
+    };
     cell.alignment = {
       horizontal: c <= 8 ? 'right' : 'center',
       vertical: 'middle',
@@ -526,19 +531,15 @@ export async function buildKirExcelBuffer(
   const spacerSigRow = totalRow + 1;
   sheet.getRow(spacerSigRow).height = 18;
 
-  // 3-Pejabat Signature Block (Exact match to LaporanKirView: Direktur | Penanggung Jawab Ruangan | Pengurus Barang)
+  // 3-Pejabat Signature Block (Direktur | Penanggung Jawab Ruangan | Pengurus Barang)
   const sigTopRow = spacerSigRow + 1;
   const sigRoleRow = sigTopRow + 1;
   const sigGapStart = sigRoleRow + 1;
   const sigNameRow = sigGapStart + 3;
   const sigNipRow = sigNameRow + 1;
 
-  const pjNama = fallbackPjRoom
-    ? fallbackPjRoom.penanggungJawab
-    : instansi.namaKepalaUnit;
-  const pjNip = fallbackPjRoom
-    ? fallbackPjRoom.nipPenanggungJawab
-    : instansi.nipKepalaUnit;
+  const pjNama = section.penanggungJawab || instansi.namaKepalaUnit;
+  const pjNip = section.nipPenanggungJawab || instansi.nipKepalaUnit;
 
   const signatureBlocks: Array<{
     range: [string, string];
@@ -590,7 +591,12 @@ export async function buildKirExcelBuffer(
     sheet.mergeCells(`${startCol}${sigRoleRow}:${endCol}${sigRoleRow}`);
     const roleCell = sheet.getCell(`${startCol}${sigRoleRow}`);
     roleCell.value = blk.roleText;
-    roleCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+    roleCell.font = {
+      name: 'Arial',
+      size: 9,
+      bold: true,
+      color: { argb: 'FF0F172A' },
+    };
     roleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
     sheet.mergeCells(`${startCol}${sigNameRow}:${endCol}${sigNameRow}`);
@@ -612,5 +618,197 @@ export async function buildKirExcelBuffer(
     nipCell.alignment = { horizontal: 'center', vertical: 'middle' };
   }
 
+  return sigNipRow;
+}
+
+/**
+ * Generates a native .xlsx Workbook buffer matching the official 13-column KIR
+ * print sheet (Logo, Kop Kiri, Kop Kanan, 13 columns, JUMLAH TOTAL, and
+ * 3-pejabat signature block: Direktur, Penanggung Jawab Ruangan, Pengurus Barang).
+ *
+ * When multiple sub-ruangan sections are provided (or splitByRoom=true), all rooms
+ * are rendered on a single lightweight worksheet with native horizontal Excel page
+ * breaks between every sub-ruangan and a single reused logo asset.
+ */
+export async function buildKirExcelBuffer(
+  barangList: Barang[],
+  instansi: InstansiSetting,
+  ruangan?: Ruangan,
+  options?: KirExcelExportOptions
+): Promise<ArrayBuffer> {
+  const startUrut = options?.startUrut ?? 1;
+  const tanggalCetak = options?.tanggalCetak ?? '21 November 2026';
+  const ruanganList = options?.ruanganList ?? [];
+  const parentName = options?.parentRuanganName;
+  const consolidateSameItems = options?.consolidateSameItems ?? true;
+
+  let sections: KirRoomSection[];
+  if (options?.sections && options.sections.length > 0) {
+    sections = options.sections;
+  } else if (!ruangan && options?.splitByRoom && ruanganList.length > 0) {
+    sections = buildKirRoomSections(barangList, ruanganList, {
+      selectedParentName: parentName ?? 'ALL',
+      selectedRuanganId: 'ALL',
+      consolidateSameItems,
+      splitByRoom: true,
+      includeEmptyRooms: options.includeEmptyRooms ?? false,
+      fallbackDirekturNama: instansi.namaKepalaUnit,
+      fallbackDirekturNip: instansi.nipKepalaUnit,
+    });
+  } else {
+    const namaRuanganHeader = ruangan
+      ? ruangan.namaRuangan
+      : parentName && parentName !== 'ALL'
+      ? parentName
+      : 'SELURUH RUANGAN';
+
+    const subRuanganHeader = ruangan?.subRuangan
+      ? `( ${ruangan.subRuangan} )`
+      : parentName && parentName !== 'ALL'
+      ? '( SEMUA SUB-RUANGAN )'
+      : '( REKAPITULASI INVENTARIS )';
+
+    const fallbackPjRoom =
+      ruangan ||
+      (parentName && parentName !== 'ALL'
+        ? getSubRuanganByParent(ruanganList, parentName)[0]
+        : undefined);
+
+    const reportRows = consolidateKirReportRows(barangList, {
+      ruangan,
+      ruanganList,
+      consolidateSameItems,
+    });
+
+    sections = [
+      {
+        sectionKey: ruangan?.id ?? 'single-section',
+        ruangan,
+        namaRuangan: namaRuanganHeader,
+        subRuanganLabel: subRuanganHeader,
+        kodeRuangan: ruangan?.kodeRuangan ?? '',
+        penanggungJawab: fallbackPjRoom
+          ? fallbackPjRoom.penanggungJawab
+          : instansi.namaKepalaUnit,
+        nipPenanggungJawab: fallbackPjRoom
+          ? fallbackPjRoom.nipPenanggungJawab
+          : instansi.nipKepalaUnit,
+        items: barangList,
+        rows: reportRows,
+        totalUnits: reportRows.reduce((acc, r) => acc + r.jumlah, 0),
+        countBaik: reportRows.reduce((acc, r) => acc + r.baik, 0),
+        countKurangBaik: reportRows.reduce((acc, r) => acc + r.kurangBaik, 0),
+        countRusakBerat: reportRows.reduce((acc, r) => acc + r.rusakBerat, 0),
+      },
+    ];
+  }
+
+  // Ensure workbook always has at least 1 valid section even when all rooms are empty
+  if (sections.length === 0) {
+    sections = [
+      {
+        sectionKey: 'empty-fallback',
+        ruangan: undefined,
+        namaRuangan:
+          parentName && parentName !== 'ALL' ? parentName : 'SELURUH RUANGAN',
+        subRuanganLabel:
+          parentName && parentName !== 'ALL'
+            ? '( SEMUA SUB-RUANGAN )'
+            : '( REKAPITULASI INVENTARIS )',
+        kodeRuangan: '',
+        penanggungJawab: instansi.namaKepalaUnit,
+        nipPenanggungJawab: instansi.nipKepalaUnit,
+        items: [],
+        rows: [],
+        totalUnits: 0,
+        countBaik: 0,
+        countKurangBaik: 0,
+        countRusakBerat: 0,
+      },
+    ];
+  }
+
+  const isMultiSection = sections.length > 1;
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'SIMKIR';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet('KARTU INVENTARIS RUANGAN', {
+    views: [{ showGridLines: false }],
+    pageSetup: {
+      paperSize: 9, // A4
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      horizontalCentered: true,
+      ...(isMultiSection ? {} : { printTitlesRow: '9:11' }),
+      margins: {
+        left: 0.4,
+        right: 0.4,
+        top: 0.45,
+        bottom: 0.55,
+        header: 0.2,
+        footer: 0.25,
+      },
+    },
+    headerFooter: {
+      oddFooter: '&R Halaman &P dari &N',
+    },
+  });
+
+  // 13 columns matching exact KIR specification
+  sheet.columns = [
+    { key: 'urut', width: 7 },    // A (1)
+    { key: 'nama', width: 28 },   // B (2)
+    { key: 'merk', width: 15 },   // C (3)
+    { key: 'seri', width: 16 },   // D (4)
+    { key: 'ukuran', width: 11 }, // E (5)
+    { key: 'bahan', width: 12 },  // F (6)
+    { key: 'tahun', width: 12 },  // G (7)
+    { key: 'kode', width: 21 },   // H (8)
+    { key: 'jumlah', width: 12 }, // I (9)
+    { key: 'baik', width: 8 },    // J (10)
+    { key: 'kb', width: 9 },      // K (11)
+    { key: 'rb', width: 9 },      // L (12)
+    { key: 'ket', width: 24 },    // M (13)
+  ];
+
+  // Register logo image ONCE in the workbook so multi-room export stays tiny & fast
+  const resolvedLogoBase64 =
+    options?.logoBase64 ||
+    (instansi.logoUrl && /^data:image\/(png|jpe?g);base64,/i.test(instansi.logoUrl)
+      ? instansi.logoUrl
+      : undefined);
+
+  let logoImageId: number | undefined;
+  if (resolvedLogoBase64) {
+    const extension: 'png' | 'jpeg' =
+      options?.logoExtension ||
+      (/^data:image\/jpe?g;base64,/i.test(resolvedLogoBase64) ? 'jpeg' : 'png');
+    logoImageId = workbook.addImage({
+      base64: resolvedLogoBase64,
+      extension,
+    });
+  }
+
+  let nextStartRow = 1;
+  sections.forEach((section, idx) => {
+    const lastRow = writeKirSectionToSheet(sheet, section, instansi, {
+      startRow: nextStartRow,
+      startUrut: idx === 0 ? startUrut : 1,
+      tanggalCetak,
+      logoImageId,
+    });
+
+    if (idx < sections.length - 1) {
+      // Native Excel horizontal page break immediately after this room's signature block
+      sheet.getRow(lastRow).addPageBreak();
+      nextStartRow = lastRow + 1;
+    }
+  });
+
   return workbook.xlsx.writeBuffer();
 }
+

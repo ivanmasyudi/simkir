@@ -23,7 +23,13 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Barang, Mutasi, Ruangan } from '../types/kir';
+import {
+  Barang,
+  MasterReferensi,
+  MasterReferensiJenis,
+  Mutasi,
+  Ruangan,
+} from '../types/kir';
 import {
   INITIAL_BARANG_LIST,
   INITIAL_MUTASI_LIST,
@@ -495,6 +501,29 @@ export async function deleteRuanganFirestore(id: string) {
   }
 }
 
+/**
+ * Safely moves every barang record in the target room to destinationRuangan FIRST,
+ * and deletes targetRuanganId ONLY after all barang updates succeed.
+ * Guarantees zero orphaned barang in Firestore, Laporan KIR, or QR Labels.
+ */
+export async function reassignBarangAndDeleteRuanganFirestore(
+  uid: string,
+  targetRuanganId: string,
+  destinationRuangan: Ruangan,
+  reassignedBarangList: Barang[]
+): Promise<void> {
+  if (targetRuanganId === destinationRuangan.id) {
+    throw new Error('Sub-ruangan tujuan pemindahan harus berbeda dari ruangan yang dihapus.');
+  }
+  if (destinationRuangan.ownerId !== uid) {
+    await createRuanganFirestore(uid, destinationRuangan);
+  }
+  for (const movedBarang of reassignedBarangList) {
+    await updateBarangFirestore(uid, movedBarang, destinationRuangan);
+  }
+  await deleteRuanganFirestore(targetRuanganId);
+}
+
 export async function createBarangFirestore(
   uid: string,
   barang: Barang,
@@ -799,4 +828,274 @@ export async function resetUserFirestoreData(
     totalDeleted: deletedRuangan + deletedBarang + deletedMutasi,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Master Referensi (Satuan, Bahan, Ukuran, Merk/Model, Katalog Barang)
+// Syncs live with Firestore /master_referensi/{refId}; if Firestore rules for
+// the new collection are not yet deployed (permission-denied), falls back
+// cleanly to user-scoped localStorage so CRUD keeps working uninterrupted.
+// ---------------------------------------------------------------------------
+
+const VALID_REF_JENIS: MasterReferensiJenis[] = [
+  'satuan',
+  'bahan',
+  'ukuran',
+  'merk',
+  'katalog',
+];
+
+function getLocalMasterRefKey(uid: string): string {
+  return `simkir_master_referensi_v1_${uid}`;
+}
+
+function readLocalMasterRef(uid: string): MasterReferensi[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(getLocalMasterRefKey(uid));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalMasterRef(uid: string, items: MasterReferensi[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(getLocalMasterRefKey(uid), JSON.stringify(items));
+  } catch {
+    // Ignore storage quota issues
+  }
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+  const msg = error instanceof Error ? error.message : String(error ?? '');
+  return (
+    code.includes('permission-denied') ||
+    /permission[-_ ]denied|missing or insufficient permissions/i.test(msg)
+  );
+}
+
+const localMasterRefListeners = new Map<
+  string,
+  Set<(items: MasterReferensi[]) => void>
+>();
+
+function notifyLocalMasterRefListeners(uid: string, items: MasterReferensi[]) {
+  const set = localMasterRefListeners.get(uid);
+  if (!set) return;
+  for (const cb of set) {
+    cb(items);
+  }
+}
+
+function buildValidMasterReferensiPayload(uid: string, item: MasterReferensi) {
+  const safeJenis: MasterReferensiJenis = VALID_REF_JENIS.includes(item.jenis)
+    ? item.jenis
+    : 'satuan';
+  return {
+    jenis: safeJenis,
+    nama: (item.nama || '').trim().slice(0, 120),
+    kode: (item.kode ?? '').trim().slice(0, 50),
+    keterangan: (item.keterangan ?? '').trim().slice(0, 200),
+    ownerId: uid,
+  };
+}
+
+export function subscribeMasterReferensi(
+  uid: string,
+  onItems: (items: MasterReferensi[]) => void
+): () => void {
+  let listeners = localMasterRefListeners.get(uid);
+  if (!listeners) {
+    listeners = new Set();
+    localMasterRefListeners.set(uid, listeners);
+  }
+  listeners.add(onItems);
+
+  const refQuery = query(
+    collection(db, 'master_referensi'),
+    where('ownerId', '==', uid)
+  );
+
+  const unsubFirestore = onSnapshot(
+    refQuery,
+    (snap) => {
+      const list: MasterReferensi[] = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          jenis: VALID_REF_JENIS.includes(data.jenis) ? data.jenis : 'satuan',
+          nama: data.nama ?? '',
+          kode: data.kode ?? '',
+          keterangan: data.keterangan ?? '',
+          ownerId: data.ownerId,
+          createdAt: timestampToIso(data.createdAt),
+          updatedAt: timestampToIso(data.updatedAt),
+        };
+      });
+      writeLocalMasterRef(uid, list);
+      onItems(list);
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        // Updated firestore.rules not yet deployed for /master_referensi: use local persistence
+        onItems(readLocalMasterRef(uid));
+      } else {
+        onItems(readLocalMasterRef(uid));
+      }
+    }
+  );
+
+  return () => {
+    unsubFirestore();
+    const set = localMasterRefListeners.get(uid);
+    if (set) {
+      set.delete(onItems);
+      if (set.size === 0) {
+        localMasterRefListeners.delete(uid);
+      }
+    }
+  };
+}
+
+export async function createMasterReferensiFirestore(
+  uid: string,
+  item: MasterReferensi
+): Promise<void> {
+  const refId = sanitizeId(item.id);
+  const path = `master_referensi/${refId}`;
+  const payload = buildValidMasterReferensiPayload(uid, item);
+  try {
+    await setDoc(doc(db, 'master_referensi', refId), {
+      ...payload,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      const nowIso = new Date().toISOString();
+      const nextItem: MasterReferensi = {
+        ...payload,
+        id: refId,
+        createdAt: item.createdAt || nowIso,
+        updatedAt: nowIso,
+      };
+      const existing = readLocalMasterRef(uid).filter((x) => x.id !== refId);
+      const updated = [...existing, nextItem];
+      writeLocalMasterRef(uid, updated);
+      notifyLocalMasterRefListeners(uid, updated);
+      return;
+    }
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function createMasterReferensiBatchFirestore(
+  uid: string,
+  items: MasterReferensi[]
+): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const chunks = chunkForFirestoreBatch(items, FIRESTORE_SAFE_BATCH_LIMIT);
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      for (const item of chunk) {
+        const refId = sanitizeId(item.id);
+        batch.set(doc(db, 'master_referensi', refId), {
+          ...buildValidMasterReferensiPayload(uid, item),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      const nowIso = new Date().toISOString();
+      const current = readLocalMasterRef(uid);
+      const map = new Map<string, MasterReferensi>(
+        current.map((x) => [x.id, x])
+      );
+      for (const item of items) {
+        const refId = sanitizeId(item.id);
+        const payload = buildValidMasterReferensiPayload(uid, item);
+        map.set(refId, {
+          ...payload,
+          id: refId,
+          createdAt: item.createdAt || nowIso,
+          updatedAt: nowIso,
+        });
+      }
+      const merged = Array.from(map.values());
+      writeLocalMasterRef(uid, merged);
+      notifyLocalMasterRefListeners(uid, merged);
+      return;
+    }
+    handleFirestoreError(error, OperationType.WRITE, 'master_referensi');
+  }
+}
+
+export async function updateMasterReferensiFirestore(
+  uid: string,
+  item: MasterReferensi
+): Promise<void> {
+  const refId = sanitizeId(item.id);
+  const path = `master_referensi/${refId}`;
+  const payload = buildValidMasterReferensiPayload(uid, item);
+  try {
+    await updateDoc(doc(db, 'master_referensi', refId), {
+      jenis: payload.jenis,
+      nama: payload.nama,
+      kode: payload.kode,
+      keterangan: payload.keterangan,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      const nowIso = new Date().toISOString();
+      const updated = readLocalMasterRef(uid).map((x) =>
+        x.id === refId
+          ? {
+              ...x,
+              jenis: payload.jenis,
+              nama: payload.nama,
+              kode: payload.kode,
+              keterangan: payload.keterangan,
+              updatedAt: nowIso,
+            }
+          : x
+      );
+      writeLocalMasterRef(uid, updated);
+      notifyLocalMasterRefListeners(uid, updated);
+      return;
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteMasterReferensiFirestore(
+  uid: string,
+  id: string
+): Promise<void> {
+  const refId = sanitizeId(id);
+  const path = `master_referensi/${refId}`;
+  try {
+    await deleteDoc(doc(db, 'master_referensi', refId));
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      const updated = readLocalMasterRef(uid).filter((x) => x.id !== refId);
+      writeLocalMasterRef(uid, updated);
+      notifyLocalMasterRefListeners(uid, updated);
+      return;
+    }
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 

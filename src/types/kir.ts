@@ -87,10 +87,29 @@ export interface InstansiSetting {
   nipPengurusBarang: string;
 }
 
+export type MasterReferensiJenis =
+  | 'satuan'
+  | 'bahan'
+  | 'ukuran'
+  | 'merk'
+  | 'katalog';
+
+export interface MasterReferensi {
+  id: string;
+  jenis: MasterReferensiJenis;
+  nama: string;
+  kode: string;
+  keterangan: string;
+  ownerId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ActiveTab =
   | 'dashboard'
   | 'barang'
   | 'ruangan'
+  | 'master-referensi'
   | 'mutasi'
   | 'qr-label'
   | 'laporan'

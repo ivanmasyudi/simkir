@@ -341,9 +341,6 @@ export const QrLabelPrintView: React.FC<QrLabelPrintViewProps> = ({
                         <span className="font-mono text-xs font-semibold text-stone-700 shrink-0">
                           {item.kodeBarang}
                         </span>
-                        <span className="font-mono text-xs text-stone-500 shrink-0">
-                          NUP {item.nup}
-                        </span>
                         <span className="font-medium text-stone-900 truncate">
                           {item.namaBarang}
                         </span>
@@ -441,10 +438,13 @@ export const QrLabelPrintView: React.FC<QrLabelPrintViewProps> = ({
                         </span>
                       </div>
                       <div className="border-l border-stone-200 pl-2">
-                        <span className="text-[10px] text-stone-500 block">NUP / URUT</span>
+                        <span className="text-[10px] text-stone-500 block">
+                          {expandPerUnit && totalUnits > 1 ? 'UNIT' : 'TAHUN'}
+                        </span>
                         <span className="font-mono font-bold text-stone-900">
-                          {item.nup}
-                          {expandPerUnit && totalUnits > 1 ? ` (${unitIndex}/${totalUnits})` : ''}
+                          {expandPerUnit && totalUnits > 1
+                            ? `${unitIndex}/${totalUnits}`
+                            : item.tahunPerolehan}
                         </span>
                       </div>
                     </div>

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
+  ArrowRightLeft,
   Building2,
   CornerDownRight,
   Edit3,
@@ -14,6 +16,8 @@ import {
 } from 'lucide-react';
 import { Barang, Ruangan } from '../types/kir';
 import {
+  evaluateRuanganDeletion,
+  formatRuanganFullLabel,
   generateAutoKodeRuangan,
   generateAutoKodeRuanganBatch,
   getUniqueParentRuanganNames,
@@ -23,6 +27,7 @@ import {
   validateRuanganInput,
 } from '../utils/kirLogic';
 import { TablePagination } from './TablePagination';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { paginateItems } from '../utils/tablePagination';
 
 interface MasterRuanganViewProps {
@@ -31,6 +36,10 @@ interface MasterRuanganViewProps {
   onSaveRuangan: (ruangan: Ruangan, isEdit: boolean) => Promise<void>;
   onSaveRuanganBatch?: (ruanganItems: Ruangan[]) => Promise<void>;
   onDeleteRuangan: (id: string) => Promise<void>;
+  onReassignAndDeleteRuangan?: (
+    targetRuanganId: string,
+    destinationRuanganId: string
+  ) => Promise<void>;
   onNavigateLaporanRuangan: (ruanganId: string) => void;
   onNavigateQrRuangan: (ruanganId: string) => void;
 }
@@ -45,6 +54,7 @@ export const MasterRuanganView: React.FC<MasterRuanganViewProps> = ({
   onSaveRuangan,
   onSaveRuanganBatch,
   onDeleteRuangan,
+  onReassignAndDeleteRuangan,
   onNavigateLaporanRuangan,
   onNavigateQrRuangan,
 }) => {
@@ -60,6 +70,15 @@ export const MasterRuanganView: React.FC<MasterRuanganViewProps> = ({
   );
   const [editingRuangan, setEditingRuangan] = useState<Ruangan | null>(null);
   const [inspectRuangan, setInspectRuangan] = useState<Ruangan | null>(null);
+  const [deleteTargetRuangan, setDeleteTargetRuangan] = useState<Ruangan | null>(
+    null
+  );
+  const [reassignDestinationId, setReassignDestinationId] = useState('');
+  const [reassignConfirmed, setReassignConfirmed] = useState(false);
+  const [isDeletingRuangan, setIsDeletingRuangan] = useState(false);
+  const [deleteRuanganError, setDeleteRuanganError] = useState<string | null>(
+    null
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -540,7 +559,12 @@ export const MasterRuanganView: React.FC<MasterRuanganViewProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => onDeleteRuangan(sub.id)}
+                                  onClick={() => {
+                                    setDeleteRuanganError(null);
+                                    setReassignDestinationId('');
+                                    setReassignConfirmed(false);
+                                    setDeleteTargetRuangan(sub);
+                                  }}
                                   aria-label={`Hapus ${sub.subRuangan || sub.namaRuangan}`}
                                   className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                                   title="Hapus Sub-Ruangan"
@@ -1084,6 +1108,262 @@ export const MasterRuanganView: React.FC<MasterRuanganViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Konfirmasi Hapus Ruangan / Blokir & Pindahkan Barang bila Masih Ada Aset */}
+      {deleteTargetRuangan && (() => {
+        const assessment = evaluateRuanganDeletion(
+          deleteTargetRuangan,
+          ruanganList,
+          barangList
+        );
+        const targetLabel =
+          deleteTargetRuangan.subRuangan ||
+          `${deleteTargetRuangan.namaRuangan} (Utama)`;
+
+        // Case 1: Ruangan KOSONG (0 barang) -> boleh dihapus langsung dengan konfirmasi
+        if (assessment.canDeleteDirectly) {
+          return (
+            <ConfirmDeleteModal
+              isOpen={true}
+              title="Hapus Data Ruangan?"
+              description="Sub-ruangan ini sudah kosong (0 barang) dan aman dihapus dari daftar."
+              itemName={targetLabel}
+              details={[
+                { label: 'Kode Ruangan', value: deleteTargetRuangan.kodeRuangan },
+                { label: 'Ruangan Induk', value: deleteTargetRuangan.namaRuangan },
+                {
+                  label: 'Penanggung Jawab',
+                  value: deleteTargetRuangan.penanggungJawab || '-',
+                },
+                { label: 'Jumlah Barang', value: '0 Unit (Kosong)' },
+              ]}
+              confirmLabel="Ya, Hapus Ruangan"
+              isDeleting={isDeletingRuangan}
+              errorMessage={deleteRuanganError}
+              onCancel={() => {
+                if (!isDeletingRuangan) {
+                  setDeleteTargetRuangan(null);
+                  setDeleteRuanganError(null);
+                }
+              }}
+              onConfirm={async () => {
+                try {
+                  setIsDeletingRuangan(true);
+                  setDeleteRuanganError(null);
+                  await onDeleteRuangan(deleteTargetRuangan.id);
+                  setDeleteTargetRuangan(null);
+                } catch (err) {
+                  setDeleteRuanganError(
+                    err instanceof Error
+                      ? err.message
+                      : 'Gagal menghapus data ruangan. Coba lagi.'
+                  );
+                } finally {
+                  setIsDeletingRuangan(false);
+                }
+              }}
+            />
+          );
+        }
+
+        // Case 2: Ruangan MASIH BERISI BARANG -> Blokir hapus langsung; wajib pindahkan barang dulu
+        const selectedDest = assessment.availableDestinations.find(
+          (r) => r.id === reassignDestinationId
+        );
+        const canExecuteReassignDelete =
+          assessment.canReassignAndDelete &&
+          Boolean(onReassignAndDeleteRuangan) &&
+          Boolean(selectedDest) &&
+          reassignConfirmed &&
+          !isDeletingRuangan;
+
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-blocked-delete-room-title"
+            className="fixed inset-0 z-50 bg-stone-900/50 flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <div className="bg-white border border-stone-200 rounded-lg max-w-lg w-full p-6 space-y-5 shadow-lg">
+              <div className="flex items-start justify-between gap-3 border-b border-stone-200 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-md bg-amber-50 border border-amber-200 text-amber-700 shrink-0 mt-0.5">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2
+                      id="modal-blocked-delete-room-title"
+                      className="text-base font-bold text-stone-900"
+                    >
+                      Ruangan Tidak Dapat Dihapus Langsung
+                    </h2>
+                    <p className="text-sm text-stone-600 mt-0.5">
+                      Masih terdapat barang inventaris di sub-ruangan ini. Demi keamanan Laporan KIR, QR, dan aset, barang tidak ikut dihapus.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={isDeletingRuangan}
+                  onClick={() => {
+                    setDeleteTargetRuangan(null);
+                    setDeleteRuanganError(null);
+                  }}
+                  aria-label="Tutup dialog hapus ruangan"
+                  className="p-1 text-stone-400 hover:text-stone-700 rounded cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Ringkasan Ruangan Target */}
+              <div className="bg-stone-50 border border-stone-200 rounded-md p-4 space-y-2 text-sm">
+                <div className="font-semibold text-stone-900">{targetLabel}</div>
+                <dl className="space-y-1 text-xs text-stone-600 pt-1 border-t border-stone-200">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <dt className="text-stone-500">Ruangan Induk</dt>
+                    <dd className="font-medium text-stone-800">
+                      {deleteTargetRuangan.namaRuangan}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <dt className="text-stone-500">Kode Ruangan</dt>
+                    <dd className="font-mono font-medium text-stone-800">
+                      {deleteTargetRuangan.kodeRuangan}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <dt className="text-stone-500">Aset Tercatat</dt>
+                    <dd className="font-semibold text-amber-800">
+                      {assessment.barangCount} jenis barang ({assessment.totalUnits} unit)
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {assessment.isBlockedNoDestination || !onReassignAndDeleteRuangan ? (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 leading-relaxed">
+                  Sub-ruangan ini adalah <strong>satu-satunya ruangan</strong> yang tersedia. Tambahkan minimal 1 sub-ruangan lain terlebih dahulu untuk menampung pemindahan barang sebelum menghapus ruangan ini.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-4 bg-[#EBF4F2]/70 border border-[#C7DFD9] rounded-md space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[#0B463B]">
+                      <ArrowRightLeft className="w-4 h-4 shrink-0" />
+                      <span>Pindahkan Semua Barang Lalu Hapus Ruangan</span>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="select-reassign-destination"
+                        className="block text-xs font-semibold text-stone-800 mb-1.5"
+                      >
+                        Pilih Sub-Ruangan Tujuan Pemindahan ({assessment.barangCount} jenis / {assessment.totalUnits} unit) *
+                      </label>
+                      <select
+                        id="select-reassign-destination"
+                        value={reassignDestinationId}
+                        onChange={(e) => {
+                          setReassignDestinationId(e.target.value);
+                          setDeleteRuanganError(null);
+                        }}
+                        disabled={isDeletingRuangan}
+                        className="w-full h-10 px-3 text-sm bg-white border border-stone-300 rounded-md focus:outline-none focus:border-[#0F5C4D]"
+                      >
+                        <option value="">
+                          -- Pilih Sub-Ruangan Tujuan --
+                        </option>
+                        {assessment.availableDestinations.map((dest) => (
+                          <option key={dest.id} value={dest.id}>
+                            {formatRuanganFullLabel(dest)} [{dest.kodeRuangan}]
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2.5 text-sm text-stone-800 cursor-pointer select-none">
+                    <input
+                      id="checkbox-confirm-reassign-delete"
+                      type="checkbox"
+                      checked={reassignConfirmed}
+                      disabled={isDeletingRuangan || !selectedDest}
+                      onChange={(e) => setReassignConfirmed(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-stone-300 text-[#0F5C4D]"
+                    />
+                    <span>
+                      Saya setuju memindahkan seluruh{' '}
+                      <strong>
+                        {assessment.barangCount} jenis barang ({assessment.totalUnits} unit)
+                      </strong>{' '}
+                      ke{' '}
+                      <strong>
+                        {selectedDest
+                          ? formatRuanganFullLabel(selectedDest)
+                          : 'sub-ruangan tujuan'}
+                      </strong>
+                      , lalu menghapus sub-ruangan <strong>{targetLabel}</strong>.
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {deleteRuanganError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-700">
+                  {deleteRuanganError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-stone-200">
+                <button
+                  type="button"
+                  disabled={isDeletingRuangan}
+                  onClick={() => {
+                    setDeleteTargetRuangan(null);
+                    setDeleteRuanganError(null);
+                  }}
+                  className="px-4 py-2.5 text-sm font-medium text-stone-700 bg-stone-100 border border-stone-300 rounded-md hover:bg-stone-200 disabled:opacity-50 cursor-pointer"
+                >
+                  {assessment.isBlockedNoDestination ? 'Tutup' : 'Batal'}
+                </button>
+                {!assessment.isBlockedNoDestination && onReassignAndDeleteRuangan && (
+                  <button
+                    type="button"
+                    disabled={!canExecuteReassignDelete}
+                    onClick={async () => {
+                      if (!selectedDest) return;
+                      try {
+                        setIsDeletingRuangan(true);
+                        setDeleteRuanganError(null);
+                        await onReassignAndDeleteRuangan(
+                          deleteTargetRuangan.id,
+                          selectedDest.id
+                        );
+                        setDeleteTargetRuangan(null);
+                      } catch (err) {
+                        setDeleteRuanganError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Gagal memindahkan barang dan menghapus ruangan. Coba lagi.'
+                        );
+                      } finally {
+                        setIsDeletingRuangan(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-red-700 rounded-md hover:bg-red-800 disabled:opacity-45 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  >
+                    <ArrowRightLeft className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isDeletingRuangan
+                        ? 'Memindahkan & Menghapus...'
+                        : 'Pindahkan Barang & Hapus Ruangan'}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

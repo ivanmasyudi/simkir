@@ -343,6 +343,59 @@
         "ownerId",
         "createdAt"
       ]
+    },
+    "MasterReferensi": {
+      "title": "MasterReferensi",
+      "description": "Data master referensi (Satuan, Bahan, Ukuran, Merk/Model, dan Katalog Jenis & Kode Barang) untuk standardisasi pengisian KIR",
+      "type": "object",
+      "properties": {
+        "jenis": {
+          "type": "string",
+          "description": "Jenis master referensi",
+          "enum": ["satuan", "bahan", "ukuran", "merk", "katalog"]
+        },
+        "nama": {
+          "type": "string",
+          "description": "Nama nilai master referensi, contoh: UNIT, BESI, 2 PK, PANASONIC, A.C SPLIT",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kode": {
+          "type": "string",
+          "description": "Kode barang baku (khusus untuk katalog barang), contoh: 1.3.2.05.02.04.004",
+          "maxLength": 50
+        },
+        "keterangan": {
+          "type": "string",
+          "description": "Catatan tambahan opsional untuk item referensi",
+          "maxLength": 200
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID pengguna pembuat/pemilik data",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan dokumen"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan dokumen"
+        }
+      },
+      "required": [
+        "jenis",
+        "nama",
+        "kode",
+        "keterangan",
+        "ownerId",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -357,6 +410,10 @@
     "/mutasi/{mutasiId}": {
       "schema": { "$ref": "#/entities/Mutasi" },
       "description": "Koleksi riwayat mutasi perpindahan ruangan dan perubahan kondisi barang"
+    },
+    "/master_referensi/{refId}": {
+      "schema": { "$ref": "#/entities/MasterReferensi" },
+      "description": "Koleksi data master referensi (Satuan, Bahan, Ukuran, Merk/Model, dan Katalog Barang)"
     }
   }
 }

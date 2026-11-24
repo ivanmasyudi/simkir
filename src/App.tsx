@@ -4,6 +4,7 @@ import {
   ArrowRightLeft,
   Building2,
   FileSpreadsheet,
+  Layers,
   LayoutDashboard,
   Menu,
   Package,
@@ -15,6 +16,7 @@ import {
   ActiveTab,
   Barang,
   InstansiSetting,
+  MasterReferensi,
   Mutasi,
   Ruangan,
 } from './types/kir';
@@ -23,21 +25,28 @@ import {
   ProbeStatus,
   resolveAppGateStatus,
 } from './utils/firebaseConnectionGate';
+import { planBarangReassignmentForRoomDelete } from './utils/kirLogic';
 import {
   auth,
   createBarangFirestore,
+  createMasterReferensiBatchFirestore,
+  createMasterReferensiFirestore,
   createRuanganFirestore,
   deleteBarangFirestore,
+  deleteMasterReferensiFirestore,
   deleteRuanganFirestore,
   FIREBASE_META,
+  reassignBarangAndDeleteRuanganFirestore,
   recordMutasiFirestore,
   resetUserFirestoreData,
   seedInitialDataToFirestore,
   signInWithGoogle,
   signOutUser,
+  subscribeMasterReferensi,
   subscribeUserCollections,
   testConnection,
   updateBarangFirestore,
+  updateMasterReferensiFirestore,
   updateRuanganFirestore,
   verifyUserFirestoreAccess,
 } from './lib/firebase';
@@ -47,6 +56,7 @@ import { FirebaseGateScreen } from './components/FirebaseGateScreen';
 import { DashboardView } from './components/DashboardView';
 import { MasterBarangView } from './components/MasterBarangView';
 import { MasterRuanganView } from './components/MasterRuanganView';
+import { MasterReferensiView } from './components/MasterReferensiView';
 import { MutasiView } from './components/MutasiView';
 import { QrLabelPrintView } from './components/QrLabelPrintView';
 import { LaporanKirView } from './components/LaporanKirView';
@@ -58,6 +68,7 @@ const PAGE_TITLES: Record<ActiveTab, string> = {
   dashboard: 'Beranda',
   barang: 'Data Barang',
   ruangan: 'Daftar Ruangan',
+  'master-referensi': 'Master Referensi',
   mutasi: 'Mutasi Barang',
   'qr-label': 'Cetak Label QR',
   laporan: 'Laporan KIR',
@@ -94,6 +105,9 @@ export function App() {
   const [ruanganList, setRuanganList] = useState<Ruangan[]>([]);
   const [barangList, setBarangList] = useState<Barang[]>([]);
   const [mutasiList, setMutasiList] = useState<Mutasi[]>([]);
+  const [masterReferensiList, setMasterReferensiList] = useState<
+    MasterReferensi[]
+  >([]);
 
   const [instansi, setInstansi] = useState<InstansiSetting>(() => {
     try {
@@ -180,6 +194,7 @@ export function App() {
         setRuanganList([]);
         setBarangList([]);
         setMutasiList([]);
+        setMasterReferensiList([]);
       }
     });
     return () => unsub();
@@ -240,7 +255,14 @@ export function App() {
       },
     });
 
-    return () => unsub();
+    const unsubMasterRef = subscribeMasterReferensi(currentUser.uid, (items) =>
+      setMasterReferensiList(items)
+    );
+
+    return () => {
+      unsub();
+      unsubMasterRef();
+    };
   }, [authReady, currentUser, isOnline, serverProbeStatus, userDbStatus]);
 
   const gate = resolveAppGateStatus({
@@ -301,6 +323,7 @@ export function App() {
       setRuanganList([]);
       setBarangList([]);
       setMutasiList([]);
+      setMasterReferensiList([]);
       setUserDbStatus('idle');
     } catch (err) {
       setCloudBannerMsg(
@@ -356,7 +379,45 @@ export function App() {
 
   const handleDeleteRuangan = async (id: string) => {
     ensureFirebaseConnected();
+    const stillHasBarang = barangList.some((b) => b.ruanganId === id);
+    if (stillHasBarang) {
+      throw new Error(
+        'Ruangan masih memiliki data barang. Pindahkan seluruh barang ke sub-ruangan lain terlebih dahulu.'
+      );
+    }
     await deleteRuanganFirestore(id);
+    if (filterRuanganId === id) {
+      setFilterRuanganId('ALL');
+    }
+  };
+
+  const handleReassignAndDeleteRuangan = async (
+    targetRuanganId: string,
+    destinationRuanganId: string
+  ) => {
+    const user = ensureFirebaseConnected();
+    const targetRuangan = ruanganList.find((r) => r.id === targetRuanganId);
+    const destinationRuangan = ruanganList.find(
+      (r) => r.id === destinationRuanganId
+    );
+    if (!targetRuangan || !destinationRuangan) {
+      throw new Error('Ruangan asal atau sub-ruangan tujuan tidak ditemukan.');
+    }
+    const reassignedBarang = planBarangReassignmentForRoomDelete(
+      targetRuangan,
+      destinationRuangan,
+      barangList,
+      new Date().toISOString()
+    );
+    await reassignBarangAndDeleteRuanganFirestore(
+      user.uid,
+      targetRuangan.id,
+      destinationRuangan,
+      reassignedBarang
+    );
+    if (filterRuanganId === targetRuanganId) {
+      setFilterRuanganId(destinationRuanganId);
+    }
   };
 
   const handleSaveBarang = async (barang: Barang, isEdit: boolean) => {
@@ -397,6 +458,35 @@ export function App() {
     await deleteBarangFirestore(id);
   };
 
+  const handleSaveMasterReferensi = async (
+    item: MasterReferensi,
+    isEdit: boolean
+  ) => {
+    const user = ensureFirebaseConnected();
+    if (isEdit) {
+      await updateMasterReferensiFirestore(user.uid, item);
+    } else {
+      await createMasterReferensiFirestore(user.uid, {
+        ...item,
+        ownerId: user.uid,
+      });
+    }
+  };
+
+  const handleSaveMasterReferensiBatch = async (items: MasterReferensi[]) => {
+    if (items.length === 0) return;
+    const user = ensureFirebaseConnected();
+    await createMasterReferensiBatchFirestore(
+      user.uid,
+      items.map((item) => ({ ...item, ownerId: user.uid }))
+    );
+  };
+
+  const handleDeleteMasterReferensi = async (id: string) => {
+    const user = ensureFirebaseConnected();
+    await deleteMasterReferensiFirestore(user.uid, id);
+  };
+
   const handleRecordMutasi = async (mutasi: Mutasi) => {
     const user = ensureFirebaseConnected();
     const targetBarang = barangList.find((b) => b.id === mutasi.barangId);
@@ -427,6 +517,7 @@ export function App() {
       setCloudBannerMsg(
         err instanceof Error ? err.message : 'Gagal memuat data awal ke cloud.'
       );
+      throw err;
     } finally {
       setIsSeedingCloud(false);
     }
@@ -483,6 +574,11 @@ export function App() {
     { id: 'dashboard' as const, label: 'Beranda', icon: LayoutDashboard },
     { id: 'barang' as const, label: 'Data Barang', icon: Package },
     { id: 'ruangan' as const, label: 'Daftar Ruangan', icon: Building2 },
+    {
+      id: 'master-referensi' as const,
+      label: 'Master Referensi',
+      icon: Layers,
+    },
     { id: 'mutasi' as const, label: 'Mutasi Barang', icon: ArrowRightLeft },
     { id: 'qr-label' as const, label: 'Cetak Label QR', icon: QrCode },
     { id: 'laporan' as const, label: 'Laporan KIR', icon: FileSpreadsheet },
@@ -646,6 +742,7 @@ export function App() {
                 barangList={barangList}
                 ruanganList={ruanganList}
                 instansi={instansi}
+                masterReferensiList={masterReferensiList}
                 initialFilterRuanganId={filterRuanganId}
                 triggerOpenAddModal={triggerAddBarang}
                 onSaveBarang={handleSaveBarang}
@@ -665,8 +762,19 @@ export function App() {
                 onSaveRuangan={handleSaveRuangan}
                 onSaveRuanganBatch={handleSaveRuanganBatch}
                 onDeleteRuangan={handleDeleteRuangan}
+                onReassignAndDeleteRuangan={handleReassignAndDeleteRuangan}
                 onNavigateLaporanRuangan={(rId) => handleNavigate('laporan', rId)}
                 onNavigateQrRuangan={(rId) => handleNavigate('qr-label', rId)}
+              />
+            )}
+
+            {activeTab === 'master-referensi' && (
+              <MasterReferensiView
+                masterList={masterReferensiList}
+                ownerId={currentUser?.uid || 'demo-user'}
+                onSaveMaster={handleSaveMasterReferensi}
+                onSaveMasterBatch={handleSaveMasterReferensiBatch}
+                onDeleteMaster={handleDeleteMasterReferensi}
               />
             )}
 

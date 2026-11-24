@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   applyMutasiToBarang,
   buildBarangRecordsFromConditionBreakdown,
+  buildKirRoomSections,
   buildQrPayload,
   calculateKirStats,
   consolidateKirReportRows,
+  evaluateRuanganDeletion,
   filterBarangList,
   formatRuanganFullLabel,
   generateAutoKodeRuangan,
@@ -16,6 +18,8 @@ import {
   getSubRuanganByParent,
   getUniqueParentRuanganNames,
   groupRuanganByParent,
+  planBarangEditFromBreakdown,
+  planBarangReassignmentForRoomDelete,
   resolveBarangRoom,
   validateBarangInput,
   validateMutasiInput,
@@ -186,6 +190,7 @@ test('buildQrPayload, getConditionCounts, generateKirCsv, and generateKirExcelHt
   const qr = JSON.parse(buildQrPayload(sampleBarangList[0], '13290702000000'));
   assert.equal(qr.app, 'SIMKIR');
   assert.equal(qr.bahan, 'BESI');
+  assert.equal('nup' in qr, false);
 
   const counts = getConditionCounts(sampleBarangList[0]);
   assert.equal(counts.baik, 2);
@@ -404,6 +409,250 @@ test('generateAutoKodeRuangan and generateAutoKodeRuanganBatch produce determini
   // Empty parent falls back cleanly to R-RNG-01
   assert.equal(generateAutoKodeRuangan('', existing), 'R-RNG-01');
 });
+
+test('planBarangEditFromBreakdown handles single-condition updates and multi-condition splits while preserving original ID', () => {
+  const existingItem: Barang = {
+    ...sampleBarangList[0],
+    id: 'brg-existing-01',
+    nup: '0005',
+    jumlah: 3,
+    kondisi: 'Baik',
+    ownerId: 'uid-owner-1',
+    createdAt: '2026-01-10T00:00:00.000Z',
+  };
+
+  const basePayload: Omit<
+    Barang,
+    'id' | 'jumlah' | 'kondisi' | 'nup' | 'ownerId' | 'createdAt'
+  > = {
+    kodeBarang: '1.3.2.05.02.04.004',
+    namaBarang: 'A.C SPLIT',
+    merkTipe: 'PANASONIC',
+    nomorSeri: 'SN-AC-01',
+    ukuran: '2 PK',
+    bahan: 'CAMPURAN',
+    kategori: 'Pendingin & Tata Udara',
+    tahunPerolehan: 2024,
+    sumberDana: 'BLUD',
+    satuan: 'UNIT',
+    ruanganId: existingItem.ruanganId,
+    ruanganNama: existingItem.ruanganNama,
+    keterangan: 'Diperbarui dari form edit',
+    updatedAt: '2026-03-01T10:00:00.000Z',
+  };
+
+  // All-zero breakdown returns null
+  assert.equal(
+    planBarangEditFromBreakdown(existingItem, basePayload, {
+      baik: 0,
+      kurangBaik: 0,
+      rusakBerat: 0,
+    }),
+    null
+  );
+
+  // Changing condition from Baik -> Rusak Berat preserves document ID without extra records
+  const singleChanged = planBarangEditFromBreakdown(
+    existingItem,
+    basePayload,
+    { baik: 0, kurangBaik: 0, rusakBerat: 2 },
+    '54321'
+  );
+  assert.ok(singleChanged);
+  assert.equal(singleChanged.updatedRecord.id, 'brg-existing-01');
+  assert.equal(singleChanged.updatedRecord.kondisi, 'Rusak Berat');
+  assert.equal(singleChanged.updatedRecord.jumlah, 2);
+  assert.equal(singleChanged.updatedRecord.ownerId, 'uid-owner-1');
+  assert.equal(singleChanged.updatedRecord.createdAt, '2026-01-10T00:00:00.000Z');
+  assert.equal(singleChanged.createdRecords.length, 0);
+
+  // Splitting into 2 Baik + 1 Kurang Baik + 1 Rusak Berat preserves ID on original condition (Baik) and creates 2 extra records
+  const splitPlan = planBarangEditFromBreakdown(
+    existingItem,
+    basePayload,
+    { baik: 2, kurangBaik: 1, rusakBerat: 1 },
+    '99999'
+  );
+  assert.ok(splitPlan);
+  assert.equal(splitPlan.updatedRecord.id, 'brg-existing-01');
+  assert.equal(splitPlan.updatedRecord.kondisi, 'Baik');
+  assert.equal(splitPlan.updatedRecord.jumlah, 2);
+  assert.equal(splitPlan.createdRecords.length, 2);
+  assert.equal(splitPlan.createdRecords[0].kondisi, 'Kurang Baik');
+  assert.equal(splitPlan.createdRecords[0].jumlah, 1);
+  assert.equal(splitPlan.createdRecords[1].kondisi, 'Rusak Berat');
+  assert.equal(splitPlan.createdRecords[1].jumlah, 1);
+  assert.notEqual(splitPlan.createdRecords[0].id, 'brg-existing-01');
+  assert.notEqual(splitPlan.createdRecords[1].id, splitPlan.createdRecords[0].id);
+});
+
+test('evaluateRuanganDeletion blocks direct delete for occupied rooms and planBarangReassignmentForRoomDelete reassigns cleanly', () => {
+  const roomOccupied: Ruangan = {
+    ...sampleRuangan,
+    id: 'ruang-occupied',
+    kodeRuangan: 'R-LAB-01',
+    namaRuangan: 'INST. LABORATORIUM',
+    subRuangan: 'R. PATOLOGI ANATOMI',
+  };
+  const roomEmpty: Ruangan = {
+    ...sampleRuangan,
+    id: 'ruang-empty',
+    kodeRuangan: 'R-LAB-02',
+    namaRuangan: 'INST. LABORATORIUM',
+    subRuangan: 'R. PATOLOGI KLINIK',
+  };
+
+  const barangInOccupied: Barang[] = [
+    { ...sampleBarangList[0], id: 'b1', ruanganId: 'ruang-occupied', jumlah: 2 },
+    { ...sampleBarangList[1], id: 'b2', ruanganId: 'ruang-occupied', jumlah: 3 },
+  ];
+
+  // Empty room can be deleted directly
+  const emptyCheck = evaluateRuanganDeletion(
+    roomEmpty,
+    [roomOccupied, roomEmpty],
+    barangInOccupied
+  );
+  assert.equal(emptyCheck.canDeleteDirectly, true);
+  assert.equal(emptyCheck.barangCount, 0);
+  assert.equal(emptyCheck.totalUnits, 0);
+  assert.equal(emptyCheck.isBlockedNoDestination, false);
+
+  // Occupied room with another room available must reassign first
+  const occupiedCheck = evaluateRuanganDeletion(
+    roomOccupied,
+    [roomOccupied, roomEmpty],
+    barangInOccupied
+  );
+  assert.equal(occupiedCheck.canDeleteDirectly, false);
+  assert.equal(occupiedCheck.barangCount, 2);
+  assert.equal(occupiedCheck.totalUnits, 5);
+  assert.equal(occupiedCheck.canReassignAndDelete, true);
+  assert.equal(occupiedCheck.availableDestinations.length, 1);
+  assert.equal(occupiedCheck.availableDestinations[0].id, 'ruang-empty');
+
+  // Occupied room when it is the ONLY room is completely blocked
+  const soleRoomCheck = evaluateRuanganDeletion(
+    roomOccupied,
+    [roomOccupied],
+    barangInOccupied
+  );
+  assert.equal(soleRoomCheck.canDeleteDirectly, false);
+  assert.equal(soleRoomCheck.canReassignAndDelete, false);
+  assert.equal(soleRoomCheck.isBlockedNoDestination, true);
+
+  // Reassignment updates ruanganId & ruanganNama without altering asset identity
+  const moved = planBarangReassignmentForRoomDelete(
+    roomOccupied,
+    roomEmpty,
+    barangInOccupied,
+    '2026-11-23T16:00:00.000Z'
+  );
+  assert.equal(moved.length, 2);
+  assert.equal(moved[0].id, 'b1');
+  assert.equal(moved[0].ruanganId, 'ruang-empty');
+  assert.equal(moved[0].ruanganNama, 'INST. LABORATORIUM — R. PATOLOGI KLINIK');
+  assert.equal(moved[0].jumlah, 2);
+  assert.equal(moved[1].ruanganId, 'ruang-empty');
+
+  // Same-room reassignment throws
+  assert.throws(() =>
+    planBarangReassignmentForRoomDelete(
+      roomOccupied,
+      roomOccupied,
+      barangInOccupied,
+      '2026-11-23T16:00:00.000Z'
+    )
+  );
+});
+
+test('buildKirRoomSections separates rooms with per-room PJ and skips/includes empty rooms cleanly', () => {
+  const roomA: Ruangan = {
+    ...sampleRuangan,
+    id: 'r-a',
+    kodeRuangan: 'R-LAB-01',
+    namaRuangan: 'INST. LABORATORIUM',
+    subRuangan: 'R. PATOLOGI ANATOMI',
+    penanggungJawab: 'dr. Andi Sp.PA',
+    nipPenanggungJawab: '198001012010011001',
+  };
+  const roomB: Ruangan = {
+    ...sampleRuangan,
+    id: 'r-b',
+    kodeRuangan: 'R-LAB-02',
+    namaRuangan: 'INST. LABORATORIUM',
+    subRuangan: 'R. PATOLOGI KLINIK',
+    penanggungJawab: 'dr. Budi Sp.PK',
+    nipPenanggungJawab: '198102022011011002',
+  };
+  const roomEmpty: Ruangan = {
+    ...sampleRuangan,
+    id: 'r-empty',
+    kodeRuangan: 'R-RAD-01',
+    namaRuangan: 'INST. RADIOLOGI',
+    subRuangan: 'R. CT-SCAN',
+    penanggungJawab: 'dr. Citra Sp.Rad',
+    nipPenanggungJawab: '198203032012012003',
+  };
+
+  const rooms = [roomA, roomB, roomEmpty];
+  const items: Barang[] = [
+    { ...sampleBarangList[0], id: 'it-1', ruanganId: 'r-a', jumlah: 2, kondisi: 'Baik' },
+    { ...sampleBarangList[1], id: 'it-2', ruanganId: 'r-b', jumlah: 4, kondisi: 'Kurang Baik' },
+  ];
+
+  // 1. Default split mode across ALL rooms skips empty rooms
+  const splitNonEmpty = buildKirRoomSections(items, rooms, {
+    selectedParentName: 'ALL',
+    selectedRuanganId: 'ALL',
+    splitByRoom: true,
+    includeEmptyRooms: false,
+  });
+  assert.equal(splitNonEmpty.length, 2);
+  assert.equal(splitNonEmpty[0].ruangan?.id, 'r-a');
+  assert.equal(splitNonEmpty[0].subRuanganLabel, '( R. PATOLOGI ANATOMI )');
+  assert.equal(splitNonEmpty[0].penanggungJawab, 'dr. Andi Sp.PA');
+  assert.equal(splitNonEmpty[0].rows[0].locationLabel, '');
+  assert.equal(splitNonEmpty[1].ruangan?.id, 'r-b');
+  assert.equal(splitNonEmpty[1].penanggungJawab, 'dr. Budi Sp.PK');
+  assert.equal(splitNonEmpty[1].countKurangBaik, 4);
+
+  // 2. includeEmptyRooms=true includes R. CT-SCAN with 0 rows
+  const splitWithEmpty = buildKirRoomSections(items, rooms, {
+    selectedParentName: 'ALL',
+    selectedRuanganId: 'ALL',
+    splitByRoom: true,
+    includeEmptyRooms: true,
+  });
+  assert.equal(splitWithEmpty.length, 3);
+  assert.equal(splitWithEmpty[2].ruangan?.id, 'r-empty');
+  assert.equal(splitWithEmpty[2].rows.length, 0);
+
+  // 3. Combined mode produces 1 merged recap section with location labels
+  const combined = buildKirRoomSections(items, rooms, {
+    selectedParentName: 'ALL',
+    selectedRuanganId: 'ALL',
+    splitByRoom: false,
+  });
+  assert.equal(combined.length, 1);
+  assert.equal(combined[0].namaRuangan, 'SELURUH RUANGAN');
+  assert.equal(combined[0].totalUnits, 6);
+  assert.ok(combined[0].rows[0].locationLabel.length > 0);
+
+  // 4. Single empty room selected directly still returns 1 section so empty state renders
+  const singleEmpty = buildKirRoomSections(items, rooms, {
+    selectedParentName: 'INST. RADIOLOGI',
+    selectedRuanganId: 'r-empty',
+    splitByRoom: true,
+    includeEmptyRooms: false,
+  });
+  assert.equal(singleEmpty.length, 1);
+  assert.equal(singleEmpty[0].ruangan?.id, 'r-empty');
+  assert.equal(singleEmpty[0].rows.length, 0);
+});
+
+
+
 
 
 

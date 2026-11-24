@@ -7,7 +7,7 @@ export const DEFAULT_INSTANSI_SETTING: InstansiSetting = {
   satuanKerja: 'UOBK RSUD SYARIFAH AMBAMI RATO EBU ( RSUD SYAMRABU )',
   kodeLokasi: '13290702000000',
   tahunPelaporan: '2002 s.d 2025',
-  halaman: '2',
+  halaman: '1',
   logoUrl: '',
   namaKepalaUnit: 'dr. H. Farhat Suryaningrat, Sp.KK',
   nipKepalaUnit: '197508142001121003',

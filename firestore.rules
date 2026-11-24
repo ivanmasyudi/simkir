@@ -200,6 +200,35 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    // Validation blueprint: MasterReferensi
+    function isValidMasterReferensi(data) {
+      return data.keys().hasAll([
+        'jenis',
+        'nama',
+        'kode',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'jenis',
+        'nama',
+        'kode',
+        'keterangan',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.jenis is string && data.jenis.size() <= 20 && data.jenis in ['satuan', 'bahan', 'ukuran', 'merk', 'katalog'] &&
+      data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 120 &&
+      data.kode is string && data.kode.size() <= 50 &&
+      data.keterangan is string && data.keterangan.size() <= 200 &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
     // Collection: /ruangan/{ruanganId}
     match /ruangan/{ruanganId} {
       allow get: if isEmailVerified() && isValidId(ruanganId) && existing().ownerId == request.auth.uid;
@@ -304,6 +333,32 @@ service cloud.firestore {
         get(/databases/$(database)/documents/ruangan/$(incoming().ruanganTujuanId)).data.ownerId == request.auth.uid;
       allow update: if false;
       allow delete: if isEmailVerified() && isValidId(mutasiId) && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection: /master_referensi/{refId}
+    match /master_referensi/{refId} {
+      allow get: if isEmailVerified() && isValidId(refId) && existing().ownerId == request.auth.uid;
+      allow list: if isEmailVerified() && existing().ownerId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(refId) &&
+        isValidMasterReferensi(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(refId) &&
+        isValidMasterReferensi(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'jenis',
+          'nama',
+          'kode',
+          'keterangan',
+          'updatedAt'
+        ]);
+      allow delete: if isEmailVerified() && isValidId(refId) && existing().ownerId == request.auth.uid;
     }
   }
 }

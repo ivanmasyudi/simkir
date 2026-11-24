@@ -296,7 +296,7 @@ export function validateBarangInput(input: Partial<Barang>): ValidationResult {
     return { valid: false, error: 'No. Kode Barang harus 1–50 karakter.' };
   }
   if (nup.length < 1 || nup.length > 20) {
-    return { valid: false, error: 'NUP / No. Urut harus 1–20 karakter.' };
+    return { valid: false, error: 'Nomor urut internal harus 1–20 karakter.' };
   }
   if (nama.length < 2 || nama.length > 150) {
     return { valid: false, error: 'Jenis / Nama barang harus 2–150 karakter.' };
@@ -513,7 +513,6 @@ export function buildQrPayload(
     app: 'SIMKIR',
     loc: kodeLokasi,
     kode: item.kodeBarang,
-    nup: item.nup,
     nama: item.namaBarang,
     merk: item.merkTipe,
     ukuran: item.ukuran,
@@ -585,6 +584,139 @@ export function buildBarangRecordsFromConditionBreakdown(
       kondisi: entry.kondisi,
     };
   });
+}
+
+export interface BarangEditPlan {
+  updatedRecord: Barang;
+  createdRecords: Barang[];
+}
+
+/**
+ * Plans an edit operation using the exact same 3-condition breakdown (Baik / Kurang Baik / Rusak Berat)
+ * as the Add Barang form. Preserves the existing document ID for the primary condition entry
+ * (preferring the original item's condition if still > 0) and creates additional records only if
+ * the user splits quantities across multiple conditions.
+ */
+export function planBarangEditFromBreakdown(
+  editingBarang: Barang,
+  base: Omit<Barang, 'id' | 'jumlah' | 'kondisi' | 'nup' | 'ownerId' | 'createdAt'>,
+  breakdown: ConditionBreakdown,
+  idSeed = Date.now().toString().slice(-5)
+): BarangEditPlan | null {
+  const rawEntries: Array<{ kondisi: KondisiBarang; jumlah: number }> = [
+    { kondisi: 'Baik', jumlah: Math.max(0, Math.floor(Number(breakdown.baik) || 0)) },
+    {
+      kondisi: 'Kurang Baik',
+      jumlah: Math.max(0, Math.floor(Number(breakdown.kurangBaik) || 0)),
+    },
+    {
+      kondisi: 'Rusak Berat',
+      jumlah: Math.max(0, Math.floor(Number(breakdown.rusakBerat) || 0)),
+    },
+  ];
+  const entries = rawEntries.filter((e) => e.jumlah > 0);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const preferredIdx = entries.findIndex((e) => e.kondisi === editingBarang.kondisi);
+  const primaryIdx = preferredIdx >= 0 ? preferredIdx : 0;
+  const primaryEntry = entries[primaryIdx];
+  const secondaryEntries = entries.filter((_, idx) => idx !== primaryIdx);
+
+  const updatedRecord: Barang = {
+    ...base,
+    id: editingBarang.id,
+    nup: editingBarang.nup || '0001',
+    jumlah: primaryEntry.jumlah,
+    kondisi: primaryEntry.kondisi,
+    ownerId: editingBarang.ownerId || 'demo-user',
+    createdAt: editingBarang.createdAt || base.updatedAt,
+  };
+
+  const createdRecords: Barang[] = secondaryEntries.map((entry, idx) => {
+    const nextNup = incrementNupString(editingBarang.nup || '0001', idx + 1);
+    return {
+      ...base,
+      id: sanitizeId(`brg-${nextNup}-${idSeed}-${idx + 1}`),
+      nup: nextNup,
+      jumlah: entry.jumlah,
+      kondisi: entry.kondisi,
+      ownerId: editingBarang.ownerId || 'demo-user',
+      createdAt: base.updatedAt,
+    };
+  });
+
+  return { updatedRecord, createdRecords };
+}
+
+export interface RuanganDeletionAssessment {
+  barangInRoom: Barang[];
+  barangCount: number;
+  totalUnits: number;
+  canDeleteDirectly: boolean;
+  availableDestinations: Ruangan[];
+  canReassignAndDelete: boolean;
+  isBlockedNoDestination: boolean;
+}
+
+/**
+ * Evaluates whether a sub-room can be deleted directly (0 barang) or must first
+ * reassign its barang to another existing sub-room so reports (KIR, Excel, QR)
+ * never end up with orphaned assets.
+ */
+export function evaluateRuanganDeletion(
+  targetRuangan: Ruangan,
+  allRuangan: Ruangan[],
+  allBarang: Barang[]
+): RuanganDeletionAssessment {
+  const barangInRoom = allBarang.filter((b) => b.ruanganId === targetRuangan.id);
+  const barangCount = barangInRoom.length;
+  const totalUnits = barangInRoom.reduce(
+    (acc, b) => acc + (Number(b.jumlah) || 0),
+    0
+  );
+  const availableDestinations = allRuangan.filter(
+    (r) => r.id !== targetRuangan.id
+  );
+  const canDeleteDirectly = barangCount === 0;
+  const canReassignAndDelete = barangCount > 0 && availableDestinations.length > 0;
+  const isBlockedNoDestination =
+    barangCount > 0 && availableDestinations.length === 0;
+
+  return {
+    barangInRoom,
+    barangCount,
+    totalUnits,
+    canDeleteDirectly,
+    availableDestinations,
+    canReassignAndDelete,
+    isBlockedNoDestination,
+  };
+}
+
+/**
+ * Builds immutable updated Barang records reassigned from targetRuangan to
+ * destinationRuangan while preserving every asset identity & condition field.
+ */
+export function planBarangReassignmentForRoomDelete(
+  targetRuangan: Ruangan,
+  destinationRuangan: Ruangan,
+  allBarang: Barang[],
+  timestampIso: string
+): Barang[] {
+  if (targetRuangan.id === destinationRuangan.id) {
+    throw new Error('Sub-ruangan tujuan pemindahan harus berbeda dari ruangan yang dihapus.');
+  }
+  const destLabel = formatRuanganFullLabel(destinationRuangan).slice(0, 120);
+  return allBarang
+    .filter((b) => b.ruanganId === targetRuangan.id)
+    .map((b) => ({
+      ...b,
+      ruanganId: destinationRuangan.id,
+      ruanganNama: destLabel,
+      updatedAt: timestampIso,
+    }));
 }
 
 export interface KirReportRow {
@@ -712,6 +844,231 @@ export function consolidateKirReportRows(
   }
 
   return Array.from(map.values());
+}
+
+export interface KirRoomSection {
+  sectionKey: string;
+  ruangan?: Ruangan;
+  namaRuangan: string;
+  subRuanganLabel: string;
+  kodeRuangan: string;
+  penanggungJawab: string;
+  nipPenanggungJawab: string;
+  items: Barang[];
+  rows: KirReportRow[];
+  totalUnits: number;
+  countBaik: number;
+  countKurangBaik: number;
+  countRusakBerat: number;
+}
+
+export interface BuildKirRoomSectionsOptions {
+  selectedParentName?: string;
+  selectedRuanganId?: string;
+  filterKondisi?: string;
+  consolidateSameItems?: boolean;
+  splitByRoom?: boolean;
+  includeEmptyRooms?: boolean;
+  fallbackDirekturNama?: string;
+  fallbackDirekturNip?: string;
+}
+
+/**
+ * Builds deterministic KIR document sections for both browser Print/PDF and
+ * 1-sheet Excel export with page breaks.
+ * - Single sub-ruangan selected -> 1 section for that room (even if 0 items).
+ * - Multi-room + splitByRoom=true -> 1 section per sub-ruangan (each resets Urut to 1,
+ *   has its own Kop and Penanggung Jawab; skips empty rooms unless includeEmptyRooms=true).
+ * - Multi-room + splitByRoom=false -> 1 combined recap section.
+ */
+export function buildKirRoomSections(
+  barangList: Barang[],
+  ruanganList: Ruangan[],
+  options: BuildKirRoomSectionsOptions = {}
+): KirRoomSection[] {
+  const selectedParentName = options.selectedParentName ?? 'ALL';
+  const selectedRuanganId = options.selectedRuanganId ?? 'ALL';
+  const filterKondisi = options.filterKondisi ?? 'ALL';
+  const consolidateSameItems = options.consolidateSameItems ?? true;
+  const splitByRoom = options.splitByRoom ?? true;
+  const includeEmptyRooms = options.includeEmptyRooms ?? false;
+  const fallbackDirekturNama = options.fallbackDirekturNama ?? '';
+  const fallbackDirekturNip = options.fallbackDirekturNip ?? '';
+
+  const parentSubRooms =
+    selectedParentName === 'ALL'
+      ? ruanganList
+      : getSubRuanganByParent(ruanganList, selectedParentName);
+
+  const parentSubIdSet =
+    selectedParentName !== 'ALL'
+      ? new Set(parentSubRooms.map((r) => r.id))
+      : null;
+
+  const filteredItems = barangList.filter((b) => {
+    if (selectedRuanganId !== 'ALL') {
+      if (b.ruanganId !== selectedRuanganId) return false;
+    } else if (parentSubIdSet) {
+      if (!parentSubIdSet.has(b.ruanganId)) return false;
+    }
+    if (filterKondisi !== 'ALL' && b.kondisi !== filterKondisi) {
+      return false;
+    }
+    return true;
+  });
+
+  const makeSectionFromRoom = (room: Ruangan, items: Barang[]): KirRoomSection => {
+    const rows = consolidateKirReportRows(items, {
+      ruangan: room,
+      ruanganList,
+      consolidateSameItems,
+    });
+    return {
+      sectionKey: room.id,
+      ruangan: room,
+      namaRuangan: room.namaRuangan,
+      subRuanganLabel: room.subRuangan ? `( ${room.subRuangan} )` : '',
+      kodeRuangan: room.kodeRuangan,
+      penanggungJawab: room.penanggungJawab || fallbackDirekturNama,
+      nipPenanggungJawab: room.nipPenanggungJawab || fallbackDirekturNip,
+      items,
+      rows,
+      totalUnits: items.reduce((acc, b) => acc + (Number(b.jumlah) || 0), 0),
+      countBaik: items.reduce((acc, b) => acc + getConditionCounts(b).baik, 0),
+      countKurangBaik: items.reduce(
+        (acc, b) => acc + getConditionCounts(b).kurangBaik,
+        0
+      ),
+      countRusakBerat: items.reduce(
+        (acc, b) => acc + getConditionCounts(b).rusakBerat,
+        0
+      ),
+    };
+  };
+
+  // Case 1: Specific sub-ruangan selected -> always 1 dedicated section
+  if (selectedRuanganId !== 'ALL') {
+    const targetRoom = ruanganList.find((r) => r.id === selectedRuanganId);
+    if (targetRoom) {
+      return [makeSectionFromRoom(targetRoom, filteredItems)];
+    }
+  }
+
+  // Case 2: Multiple rooms + Split per sub-ruangan
+  if (selectedRuanganId === 'ALL' && splitByRoom && parentSubRooms.length > 0) {
+    const itemsByRoomId = new Map<string, Barang[]>();
+    const knownRoomIds = new Set(parentSubRooms.map((r) => r.id));
+    const unmappedItems: Barang[] = [];
+
+    for (const item of filteredItems) {
+      if (knownRoomIds.has(item.ruanganId)) {
+        const list = itemsByRoomId.get(item.ruanganId);
+        if (list) {
+          list.push(item);
+        } else {
+          itemsByRoomId.set(item.ruanganId, [item]);
+        }
+      } else {
+        unmappedItems.push(item);
+      }
+    }
+
+    const sections: KirRoomSection[] = [];
+    for (const room of parentSubRooms) {
+      const roomItems = itemsByRoomId.get(room.id) ?? [];
+      if (!includeEmptyRooms && roomItems.length === 0) {
+        continue;
+      }
+      sections.push(makeSectionFromRoom(room, roomItems));
+    }
+
+    if (unmappedItems.length > 0) {
+      const rows = consolidateKirReportRows(unmappedItems, {
+        ruangan: undefined,
+        ruanganList,
+        consolidateSameItems,
+      });
+      sections.push({
+        sectionKey: 'unmapped-rooms',
+        ruangan: undefined,
+        namaRuangan: 'RUANGAN LAINNYA',
+        subRuanganLabel: '( DATA BELUM TERPETAKAN )',
+        kodeRuangan: '-',
+        penanggungJawab: fallbackDirekturNama,
+        nipPenanggungJawab: fallbackDirekturNip,
+        items: unmappedItems,
+        rows,
+        totalUnits: unmappedItems.reduce(
+          (acc, b) => acc + (Number(b.jumlah) || 0),
+          0
+        ),
+        countBaik: unmappedItems.reduce(
+          (acc, b) => acc + getConditionCounts(b).baik,
+          0
+        ),
+        countKurangBaik: unmappedItems.reduce(
+          (acc, b) => acc + getConditionCounts(b).kurangBaik,
+          0
+        ),
+        countRusakBerat: unmappedItems.reduce(
+          (acc, b) => acc + getConditionCounts(b).rusakBerat,
+          0
+        ),
+      });
+    }
+
+    return sections;
+  }
+
+  // Case 3: Combined single recap section
+  const fallbackPjRoom =
+    selectedParentName !== 'ALL' ? parentSubRooms[0] : undefined;
+  const rows = consolidateKirReportRows(filteredItems, {
+    ruangan: undefined,
+    ruanganList,
+    consolidateSameItems,
+  });
+
+  return [
+    {
+      sectionKey:
+        selectedParentName !== 'ALL'
+          ? `combined-${selectedParentName}`
+          : 'combined-all',
+      ruangan: undefined,
+      namaRuangan:
+        selectedParentName !== 'ALL' ? selectedParentName : 'SELURUH RUANGAN',
+      subRuanganLabel:
+        selectedParentName !== 'ALL'
+          ? '( SEMUA SUB-RUANGAN )'
+          : '( REKAPITULASI INVENTARIS )',
+      kodeRuangan: '',
+      penanggungJawab: fallbackPjRoom
+        ? fallbackPjRoom.penanggungJawab
+        : fallbackDirekturNama,
+      nipPenanggungJawab: fallbackPjRoom
+        ? fallbackPjRoom.nipPenanggungJawab
+        : fallbackDirekturNip,
+      items: filteredItems,
+      rows,
+      totalUnits: filteredItems.reduce(
+        (acc, b) => acc + (Number(b.jumlah) || 0),
+        0
+      ),
+      countBaik: filteredItems.reduce(
+        (acc, b) => acc + getConditionCounts(b).baik,
+        0
+      ),
+      countKurangBaik: filteredItems.reduce(
+        (acc, b) => acc + getConditionCounts(b).kurangBaik,
+        0
+      ),
+      countRusakBerat: filteredItems.reduce(
+        (acc, b) => acc + getConditionCounts(b).rusakBerat,
+        0
+      ),
+    },
+  ];
 }
 
 export function generateKirCsv(
